@@ -1,0 +1,39 @@
+# Python & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# PyInstaller Build & Packaging
+build/
+dist/
+release/
+*.spec
+version_info.txt
+
+# Sensitive User Credentials & Session Data (Strictly Isolated)
+session_cookies.txt
+cookies.txt
+*.cookie
+*.cookies
+
+# Media & User Downloads
+downloads/
+*.mp3
+*.m4a
+*.lrc
+*.jpg
+*.jpeg
+*.png
+*.webp
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+[Dd]esktop.ini
