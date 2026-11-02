@@ -31,6 +31,7 @@ class TrackMetadata:
     total_tracks: Optional[int] = None
     duration_seconds: Optional[int] = None
     thumbnail_url: Optional[str] = None
+    artwork_url: Optional[str] = None
     source_url: str = ""
     lyrics: Optional[str] = None
     is_synced_lyrics: bool = False

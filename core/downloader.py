@@ -346,8 +346,47 @@ class YoutubeMusicDownloader:
         # 메타데이터 구성 (원본 앨범 트랙 정보 조회 보강)
         meta = self._extract_metadata(info, track_index, total_tracks, is_album_playlist=is_album)
 
-        # 앨범 커버 수집 (현재 트랙의 전용 임시 파일에서만 탐색하여 이미지 섞임 완전 차단)
+        # 앨범 커버 수집 (우선순위: 1. iTunes 공식 1000x1000 아트 -> 2. YouTube Music 1:1 정방형 아트 -> 3. 영상 썸네일 블랙바 보정)
         cover_bytes = None
+
+        # 1순위: iTunes 공식 고화질 1000x1000 스튜디오 앨범아트
+        if meta.artwork_url:
+            try:
+                req = urllib.request.Request(meta.artwork_url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    art_data = resp.read()
+                    cover_bytes = process_cover_image(
+                        art_data,
+                        crop_to_square=self.options.crop_square_cover
+                    )
+            except Exception:
+                cover_bytes = None
+
+        # 2순위: YouTube Music 전용 1:1 고화질 앨범아트 (googleusercontent 등)
+        if not cover_bytes and info.get('thumbnails'):
+            best_yt_square_url = None
+            for t in info.get('thumbnails', []):
+                t_url = t.get('url', '')
+                w = t.get('width')
+                h = t.get('height')
+                if 'googleusercontent' in t_url:
+                    best_yt_square_url = re.sub(r'=w\d+-h\d+', '=w1200-h1200', t_url)
+                    break
+                elif w and h and w == h and w >= 200:
+                    best_yt_square_url = t_url
+            if best_yt_square_url:
+                try:
+                    req = urllib.request.Request(best_yt_square_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    with urllib.request.urlopen(req, timeout=5) as resp:
+                        t_data = resp.read()
+                        cover_bytes = process_cover_image(
+                            t_data,
+                            crop_to_square=self.options.crop_square_cover
+                        )
+                except Exception:
+                    cover_bytes = None
+
+        # 3순위: 다운로드된 로컬 썸네일 파일 (블랙바 자동 보정 적용)
         thumb_candidates = (
             glob.glob(os.path.join(self.options.output_dir, f"{temp_prefix}*.jpg")) +
             glob.glob(os.path.join(self.options.output_dir, f"{temp_prefix}*.webp")) +
@@ -359,7 +398,7 @@ class YoutubeMusicDownloader:
                 selected_thumb_file = t
                 break
 
-        if selected_thumb_file:
+        if not cover_bytes and selected_thumb_file:
             try:
                 with open(selected_thumb_file, "rb") as tf:
                     thumb_data = tf.read()
@@ -369,11 +408,9 @@ class YoutubeMusicDownloader:
                 )
             except Exception:
                 pass
-            try:
-                os.remove(selected_thumb_file)
-            except Exception:
-                pass
-        elif meta.thumbnail_url:
+
+        # 4순위: meta.thumbnail_url 백업
+        if not cover_bytes and meta.thumbnail_url:
             try:
                 req = urllib.request.Request(meta.thumbnail_url, headers={'User-Agent': 'Mozilla/5.0'})
                 with urllib.request.urlopen(req, timeout=5) as resp:
@@ -384,6 +421,14 @@ class YoutubeMusicDownloader:
                     )
             except Exception:
                 pass
+
+        # 임시 썸네일 파일 정리
+        for t in thumb_candidates:
+            if os.path.isfile(t):
+                try:
+                    os.remove(t)
+                except Exception:
+                    pass
 
         # 자막/가사 확인 (현재 트랙 전용 자막 파일만 탐색)
         embedded_sub_text = self._read_subtitle_files(self.options.output_dir, temp_prefix)
@@ -506,6 +551,8 @@ class YoutubeMusicDownloader:
             if not release_year and resolved.get('release_year'):
                 release_year = resolved['release_year']
 
+        artwork_url = resolved.get('artwork_url') if resolved else None
+
         # 만약 원본 앨범 조회가 불가능한 경우:
         # 재생목록이 원본 앨범 자체(OLAK5uy_ 등)인 경우에만 track_index 적용,
         # 일반 재생목록(Liked Music, 임의 재생목록)에서는 엉뚱한 재생목록 순번을 앨범 트랙 번호로 넣지 않음
@@ -522,6 +569,7 @@ class YoutubeMusicDownloader:
             total_tracks=orig_total_tracks,
             duration_seconds=info.get('duration'),
             thumbnail_url=thumb_url,
+            artwork_url=artwork_url,
             source_url=info.get('webpage_url') or ""
         )
 
