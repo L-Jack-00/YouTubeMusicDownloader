@@ -17,7 +17,6 @@ from .lyrics import resolve_lyrics
 from .tagger import tag_audio_file
 from .alsong import clean_search_term
 from .metadata_resolver import resolve_album_metadata
-from .korean_util import refine_korean_metadata, prefer_korean_artist, prefer_korean_title
 from .cookie_util import strip_ansi_codes, is_browser_cookie_locked
 
 
@@ -104,6 +103,23 @@ def ensure_js_runtime():
                 return
 
 
+def clean_display_title(title: str) -> str:
+    """
+    곡 제목에서 [MV], [Official Audio], [가사/Lyrics] 등 불필요한 영상 태그만 정제하고,
+    (Feat. ...), (with ...), 부제 등 실제 곡의 피처링 및 부제 정보는 온전히 보존합니다.
+    """
+    if not title:
+        return ""
+    t = title.strip()
+    # 대괄호 태그 제거 ([MV], [Official], [가사/Lyrics], [Live] 등)
+    t = re.sub(r'\[.*?\]', '', t)
+    # 소괄호 중 명백한 비디오 기술 태그만 제거 (피처링, 부제는 엄격 보존)
+    t = re.sub(r'\((?:Official\s*(?:Music\s*)?Video|Official\s*Audio|M/?V|Live\s*Clip|Special\s*Clip|Lyrics)\)', '', t, flags=re.IGNORECASE)
+    # 연속 공백 정리
+    t = re.sub(r'\s+', ' ', t).strip()
+    return t or title.strip()
+
+
 def sanitize_filename(name: str) -> str:
     """Windows 파일시스템에서 허용되지 않는 특수문자 제거"""
     cleaned = re.sub(r'[\\/*?:"<>|]', "", name)
@@ -175,6 +191,11 @@ class YoutubeMusicDownloader:
             'no_warnings': True,
             'remote_components': ['ejs:github'],
             'geo_bypass_country': 'KR',
+            'extractor_args': {
+                'youtube': {
+                    'lang': ['ko'],
+                }
+            },
             'http_headers': {'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'},
         }
         self._apply_cookie_opts(ydl_opts)
@@ -198,10 +219,29 @@ class YoutubeMusicDownloader:
             for idx, entry in enumerate(entries_list, start=1):
                 raw_t = entry.get('title') or f"Track {idx}"
                 raw_a = entry.get('artist') or entry.get('uploader') or ""
-                k_artist, k_title = refine_korean_metadata(raw_t, raw_a, clean_search_term(raw_t))
+                channel = entry.get('channel') or entry.get('uploader') or ""
+                if channel and any('\uac00' <= c <= '\ud7a3' for c in channel) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                    if " - " in channel:
+                        for cp in channel.split(" - "):
+                            cp_s = cp.strip()
+                            if any('\uac00' <= c <= '\ud7a3' for c in cp_s) and "topic" not in cp_s.lower():
+                                raw_a = cp_s
+                                break
+                    elif "topic" not in channel.lower():
+                        raw_a = channel
+
+                disp_title = raw_t
+                if " - " in raw_t:
+                    p = raw_t.split(" - ", 1)
+                    if any('\uac00' <= c <= '\ud7a3' for c in p[0]) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                        raw_a = p[0].strip()
+                    disp_title = p[1].strip()
+
+                disp_title = clean_display_title(disp_title)
+
                 tracks.append({
-                    'title': k_title or raw_t,
-                    'artist': k_artist or raw_a,
+                    'title': disp_title or raw_t,
+                    'artist': raw_a,
                     'album': entry.get('album') or info.get('title') or "",
                     'duration': entry.get('duration'),
                     'url': entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}",
@@ -215,10 +255,29 @@ class YoutubeMusicDownloader:
             # 단일 곡인 경우
             raw_t = info.get('title') or "Unknown Track"
             raw_a = info.get('artist') or info.get('uploader') or ""
-            k_artist, k_title = refine_korean_metadata(raw_t, raw_a, clean_search_term(raw_t))
+            channel = info.get('channel') or info.get('uploader') or ""
+            if channel and any('\uac00' <= c <= '\ud7a3' for c in channel) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                if " - " in channel:
+                    for cp in channel.split(" - "):
+                        cp_s = cp.strip()
+                        if any('\uac00' <= c <= '\ud7a3' for c in cp_s) and "topic" not in cp_s.lower():
+                            raw_a = cp_s
+                            break
+                elif "topic" not in channel.lower():
+                    raw_a = channel
+
+            disp_title = raw_t
+            if " - " in raw_t:
+                p = raw_t.split(" - ", 1)
+                if any('\uac00' <= c <= '\ud7a3' for c in p[0]) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                    raw_a = p[0].strip()
+                disp_title = p[1].strip()
+
+            disp_title = clean_display_title(disp_title)
+
             return [{
-                'title': k_title or raw_t,
-                'artist': k_artist or raw_a,
+                'title': disp_title or raw_t,
+                'artist': raw_a,
                 'album': info.get('album') or "",
                 'duration': info.get('duration'),
                 'url': url,
@@ -268,6 +327,11 @@ class YoutubeMusicDownloader:
             'no_warnings': True,
             'remote_components': ['ejs:github'],
             'geo_bypass_country': 'KR',
+            'extractor_args': {
+                'youtube': {
+                    'lang': ['ko'],
+                }
+            },
             'http_headers': {'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'},
         }
 
@@ -503,19 +567,38 @@ class YoutubeMusicDownloader:
         total_tracks: int,
         is_album_playlist: bool = False
     ) -> TrackMetadata:
-        """yt-dlp 정보 및 원본 앨범 조회를 결합하여 정확한 한글 곡 정보 구성"""
+        """yt-dlp 정보 및 원본 앨범 조회를 결합하여 피처링과 한글이 보존된 곡 정보 구성"""
         raw_title = info.get('title') or ""
-        raw_artist = info.get('artist') or info.get('creator') or info.get('uploader') or ""
+        artist = info.get('artist') or ""
+        channel = info.get('channel') or info.get('uploader') or ""
         album = info.get('album') or ""
 
-        # 한국어 우선 아티스트 및 곡명 정제
-        k_artist, k_title = refine_korean_metadata(
-            raw_title=raw_title,
-            artist=raw_artist,
-            clean_title=clean_search_term(raw_title)
-        )
-        artist = k_artist or raw_artist
-        clean_title = k_title or clean_search_term(raw_title)
+        # 1. 아티스트 이름 보강:
+        # 유튜브 뮤직 웹에서 보이는 한글 아티스트명 반영 (channel 또는 uploader에 한국어가 있는 경우)
+        if not artist:
+            artist = channel
+        elif channel and any('\uac00' <= c <= '\ud7a3' for c in channel) and not any('\uac00' <= c <= '\ud7a3' for c in artist):
+            if " - " in channel:
+                for cp in channel.split(" - "):
+                    cp_s = cp.strip()
+                    if any('\uac00' <= c <= '\ud7a3' for c in cp_s) and "topic" not in cp_s.lower():
+                        artist = cp_s
+                        break
+            elif "topic" not in channel.lower():
+                artist = channel
+
+        # 2. 영상 제목이 '가수 - 제목' 형태인 경우
+        clean_title = raw_title
+        if " - " in raw_title:
+            parts = raw_title.split(" - ", 1)
+            left_part = parts[0].strip()
+            right_part = parts[1].strip()
+            if any('\uac00' <= c <= '\ud7a3' for c in left_part) and not any('\uac00' <= c <= '\ud7a3' for c in artist):
+                artist = left_part
+            clean_title = right_part
+
+        # 3. 곡명 정제: 피처링(Feat. ...), 부제는 엄격 보존하고 영상 잡동사니 태그([MV], [가사] 등)만 정제
+        display_title = clean_display_title(clean_title)
 
         release_year = None
         if info.get('release_year'):
@@ -531,10 +614,13 @@ class YoutubeMusicDownloader:
         orig_track_number = info.get('track_number')
         orig_total_tracks = info.get('track_count')
 
-        # yt-dlp에 원본 앨범 트랙 번호가 없거나 앨범명이 누락된 경우 정밀 보강
+        # 가사 및 앨범 태그 조회를 위한 검색 쿼리 정제 (clean_search_term은 외부 검색 매칭에만 사용)
+        search_query_title = clean_search_term(display_title)
+        search_query_artist = clean_search_term(artist)
+
         resolved = resolve_album_metadata(
-            title=clean_title or raw_title,
-            artist=artist,
+            title=search_query_title or display_title,
+            artist=search_query_artist or artist,
             album=album
         )
         if resolved:
@@ -542,25 +628,22 @@ class YoutubeMusicDownloader:
                 orig_track_number = resolved['track_number']
             if not orig_total_tracks and resolved.get('total_tracks'):
                 orig_total_tracks = resolved['total_tracks']
-            if (not album or album == clean_title) and resolved.get('album'):
+            if (not album or album == raw_title) and resolved.get('album'):
                 album = resolved['album']
             if not artist or artist == "Unknown Artist":
                 if resolved.get('artist'):
-                    artist = prefer_korean_artist(resolved['artist'])
+                    artist = resolved['artist']
             if not release_year and resolved.get('release_year'):
                 release_year = resolved['release_year']
 
-        # 만약 원본 앨범 조회가 불가능한 경우:
-        # 재생목록이 원본 앨범 자체(OLAK5uy_ 등)인 경우에만 track_index 적용,
-        # 일반 재생목록(Liked Music, 임의 재생목록)에서는 엉뚱한 재생목록 순번을 앨범 트랙 번호로 넣지 않음
         if orig_track_number is None and is_album_playlist:
             orig_track_number = track_index
             orig_total_tracks = total_tracks
 
         return TrackMetadata(
-            title=clean_title or raw_title,
+            title=display_title or raw_title,
             artist=artist or "Unknown Artist",
-            album=album or clean_title or raw_title,
+            album=album or display_title or raw_title,
             release_year=release_year,
             track_number=orig_track_number,
             total_tracks=orig_total_tracks,

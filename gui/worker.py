@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Asynchronous background download worker using PyQt6 QThread.
+Includes automated retry pass for failed playlist items.
 """
-from typing import List, Dict, Any, Optional
+import time
+from typing import List, Dict, Any, Optional, Tuple
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.types import DownloadState, DownloadOptions
@@ -50,6 +52,7 @@ class DownloadWorker(QThread):
             self.log_emitted.emit(f"[*] 총 {total_count}개의 음원을 확인했습니다.")
 
             succeeded_count = 0
+            failed_tracks: List[Tuple[int, Dict[str, Any]]] = []
 
             # 2. 개별 음원 순차 다운로드
             for idx, track_info in enumerate(tracks, start=1):
@@ -89,9 +92,67 @@ class DownloadWorker(QThread):
                     self.track_completed.emit(track_title, saved_path)
                     self.log_emitted.emit(f"[+] 다운로드 및 태깅 완료: {saved_path}")
                 else:
-                    self.log_emitted.emit(f"[!] '{track_title}' 처리를 건너뛰었습니다.")
+                    failed_tracks.append((idx, track_info))
+                    self.log_emitted.emit(f"[!] '{track_title}' 다운로드 실패 (마지막에 자동 재시도 예정)")
 
-            # 3. 전체 완료 보고
+            # 3. 실패한 음원 자동 재시도 단계 (네트워크 지연, 일시적 오류 자동 복구)
+            if failed_tracks and not self._is_stopped:
+                retry_total = len(failed_tracks)
+                self.log_emitted.emit("\n" + "=" * 55)
+                self.log_emitted.emit(f"[*] 다운로드되지 않은 {retry_total}개 음원에 대한 자동 재시도를 시작합니다...")
+                self.log_emitted.emit("=" * 55)
+
+                remaining_failed = []
+
+                for retry_idx, (orig_idx, track_info) in enumerate(failed_tracks, start=1):
+                    if self._is_stopped:
+                        self.work_cancelled.emit()
+                        return
+
+                    track_title = track_info.get('title') or f"Track {orig_idx}"
+                    track_url = track_info.get('url') or self.url
+
+                    self.log_emitted.emit(f"\n[재시도 {retry_idx}/{retry_total}] {track_title}")
+                    self.progress_changed.emit(
+                        "자동 재시도 중",
+                        95.0,
+                        f"[{retry_idx}/{retry_total}] '{track_title}' 재다운로드 시도 중..."
+                    )
+
+                    # 일시적인 스트림 요청 제한을 완화하기 위한 짧은 대기
+                    time.sleep(1.0)
+
+                    def retry_cb(state: DownloadState, pct: float, msg: str):
+                        if self._is_stopped:
+                            return
+                        self.progress_changed.emit(f"재시도 ({retry_idx}/{retry_total})", 95.0, f"'{track_title}': {msg}")
+
+                    saved_path = self.downloader.download_track(
+                        url=track_url,
+                        track_index=orig_idx,
+                        total_tracks=total_count,
+                        is_album=track_info.get('is_album', False),
+                        progress_cb=retry_cb
+                    )
+
+                    if self._is_stopped:
+                        self.work_cancelled.emit()
+                        return
+
+                    if saved_path:
+                        succeeded_count += 1
+                        self.track_completed.emit(track_title, saved_path)
+                        self.log_emitted.emit(f"[+] 재시도 성공: {saved_path}")
+                    else:
+                        remaining_failed.append(track_title)
+                        self.log_emitted.emit(f"[-] 최종 실패: '{track_title}'")
+
+                if remaining_failed:
+                    self.log_emitted.emit(f"\n[안내] 최종 다운로드 실패 음원 ({len(remaining_failed)}개):")
+                    for rf in remaining_failed:
+                        self.log_emitted.emit(f"  - {rf}")
+
+            # 4. 전체 완료 보고
             self.progress_changed.emit("완료", 100.0, f"총 {succeeded_count}/{total_count}개 음원 처리 완료!")
             self.batch_finished.emit(succeeded_count, total_count)
             self.log_emitted.emit(f"\n[완료] 총 {succeeded_count}/{total_count}개의 음원이 저장되었습니다.")
