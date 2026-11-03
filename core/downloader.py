@@ -749,10 +749,10 @@ class YtMusicDownloader:
         # 자막/가사 확인 (현재 트랙 전용 자막 파일만 탐색)
         embedded_sub_text = self._read_subtitle_files(self.options.output_dir, temp_prefix)
 
-        # 가사 수집 (Google CDN & YouTube 네이티브 파이프라인)
+        # 가사 수집 (Google CDN 자막 & LRCLIB 503 방어 하네스 통합 파이프라인)
         if self.options.embed_lyrics or self.options.save_lrc_file:
             if progress_cb:
-                progress_cb(DownloadState.FETCHING_LYRICS, 75.0, f"[{track_index}/{total_tracks}] 자막 및 가사 추출 중 (Google CDN)...")
+                progress_cb(DownloadState.FETCHING_LYRICS, 75.0, f"[{track_index}/{total_tracks}] 실시간 싱크 가사 수집 중...")
 
             lyrics_text, is_synced, source_name = resolve_lyrics(
                 title=meta.title,

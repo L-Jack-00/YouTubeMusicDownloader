@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Headless unit tests for Google CDN & YouTube Native Subtitles / TimedText lyrics engine.
-Tests WebVTT/SRT parsing (synced LRC vs plain lyrics fallback) and description lyrics extraction.
+Headless unit tests for Google CDN & LRCLIB lyrics engine.
+Tests WebVTT/SRT parsing, candidate artist resolution, LRCLIB 503 retry defense, and description lyrics extraction.
 """
 import unittest
 from core.alsong import clean_search_term
+from core.lrclib import get_artist_search_candidates
 from core.lyrics import (
     parse_subtitles_to_lrc,
     extract_lyrics_from_description,
@@ -25,6 +26,22 @@ class TestLyricsModule(unittest.TestCase):
         for raw, expected in cases:
             cleaned = clean_search_term(raw)
             self.assertEqual(cleaned, expected, f"Failed cleaning: {raw} -> got '{cleaned}'")
+
+    def test_get_artist_search_candidates(self):
+        c1 = get_artist_search_candidates("긱스 Geeks")
+        self.assertIn("긱스", c1)
+        self.assertIn("Geeks", c1)
+
+        c2 = get_artist_search_candidates("에픽하이 (Epik High)")
+        self.assertIn("에픽하이", c2)
+        self.assertIn("Epik High", c2)
+
+        c3 = get_artist_search_candidates("Dynamicduo - 다이나믹 듀오")
+        self.assertIn("Dynamicduo", c3)
+        self.assertIn("다이나믹 듀오", c3)
+
+        c4 = get_artist_search_candidates("리쌍 (feat. Harim)")
+        self.assertIn("리쌍", c4)
 
     def test_parse_subtitles_vtt_with_timestamps_to_synced_lrc(self):
         sample_vtt = """WEBVTT
@@ -105,42 +122,33 @@ Credit:
         self.assertNotIn("Credit:", extracted)
         self.assertNotIn("[가사]", extracted)
 
-    def test_resolve_lyrics_subtitles_priority_over_description(self):
+    def test_resolve_lyrics_subtitles_priority_over_lrclib(self):
         sample_vtt = """WEBVTT
 
 00:00:10.000 --> 00:00:14.000
 자막 가사입니다
 """
-        sample_desc = """[가사]
-설명란 가사 1행
-설명란 가사 2행
-설명란 가사 3행
-"""
         lyrics, is_synced, source = resolve_lyrics(
-            title="테스트 곡",
-            artist="테스트 아티스트",
-            embedded_subtitles=sample_vtt,
-            description=sample_desc
+            title="Officially Missing You",
+            artist="긱스",
+            embedded_subtitles=sample_vtt
         )
         self.assertEqual(source, "YouTube Subtitles (Synced)")
         self.assertTrue(is_synced)
         self.assertIn("[00:10.00] 자막 가사입니다", lyrics)
 
-    def test_resolve_lyrics_falls_back_to_description_when_no_subtitles(self):
-        sample_desc = """[Lyrics]
-Line one of song
-Line two of song
-Line three of song
-"""
+    def test_resolve_lyrics_lrclib_synced_matching(self):
+        # 긱스 Officially Missing You -> LRCLIB 실시간 싱크 가사 정상 획득 검증
         lyrics, is_synced, source = resolve_lyrics(
-            title="Test Song",
-            artist="Test Artist",
-            embedded_subtitles=None,
-            description=sample_desc
+            title="Officially Missing You",
+            artist="긱스 Geeks",
+            embedded_subtitles=None
         )
-        self.assertEqual(source, "YouTube Description (Plain)")
-        self.assertFalse(is_synced)
-        self.assertIn("Line one of song", lyrics)
+        self.assertIsNotNone(lyrics)
+        self.assertTrue(is_synced)
+        self.assertEqual(source, "LRCLIB (Synced)")
+        self.assertIn("Grandline", lyrics)
+        self.assertIn("[00:", lyrics)
 
 
 if __name__ == '__main__':

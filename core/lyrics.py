@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-Google CDN & YouTube Native Subtitles / TimedText Lyrics Resolver.
-Third-party dependency-free (0% 503 error) high-speed lyrics engine.
+Google CDN & LRCLIB Dual-Tier High-Precision Lyrics Engine.
+Features 503 anti-crash exponential backoff harness and millisecond-accurate sync lyrics.
 """
 import re
 from typing import Optional, Tuple
+from .lrclib import fetch_lrclib_lyrics, get_artist_search_candidates
 
 
 def parse_subtitles_to_lrc(sub_text: str) -> Tuple[Optional[str], bool, str]:
@@ -103,11 +104,10 @@ def resolve_lyrics(
     description: Optional[str] = None
 ) -> Tuple[Optional[str], bool, str]:
     """
-    Google CDN & 유튜브 네이티브 가사 수집 엔진:
-    - 외부 서드파티 API(알송, LRCLIB 등)의 503 에러나 레이트리밋 없이,
-      구글 초고속 CDN에서 직접 음원 영상의 자막/텍스트를 밀리초 단위로 수집합니다.
-    - 타임스탬프(싱크 정보)가 있는 경우: [mm:ss.xx] 표준 싱크 가사(LRC)로 변환 (is_synced = True)
-    - 타임스탬프가 없는 경우: 정제된 일반 줄글 가사로 변환 (is_synced = False)
+    통합 3계층 고정밀 가사 수집 파이프라인:
+    1순위: Google CDN 유튜브 공식/자동 자막 (타임스탬프 변환)
+    2순위: LRCLIB 고성능 싱크 가사 DB (503 지수 백오프 하네스 + 다중 후보 정밀 매칭)
+    3순위: 영상 설명란(Description) 공식 가사 텍스트 추출 (일반 가사 폴백)
 
     반환값: (가사 내용, 싱크 가사 여부, 제공 출처)
     """
@@ -117,11 +117,27 @@ def resolve_lyrics(
         if lrc_text:
             return (lrc_text, is_synced, source)
 
-    # 2순위: 영상 설명란(Description) 내 공식 가사 블록 추출 (일반 가사)
+    # 2순위: LRCLIB 실시간 싱크 가사 DB 검색 (503 에러 방어 하네스 탑재)
+    if title:
+        try:
+            lrclib_res = fetch_lrclib_lyrics(
+                title=title,
+                artist=artist,
+                album=album,
+                duration_seconds=duration_seconds,
+                timeout=5
+            )
+            if lrclib_res:
+                lyrics_text, is_synced = lrclib_res
+                src = "LRCLIB (Synced)" if is_synced else "LRCLIB (Plain)"
+                return (lyrics_text, is_synced, src)
+        except Exception:
+            pass
+
+    # 3순위: 영상 설명란(Description) 내 공식 가사 블록 추출 (일반 가사)
     if description:
         desc_lyrics = extract_lyrics_from_description(description)
         if desc_lyrics:
             return (desc_lyrics, False, "YouTube Description (Plain)")
 
     return (None, False, "None")
-
