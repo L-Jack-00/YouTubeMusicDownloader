@@ -9,9 +9,8 @@ from PIL import Image
 
 def detect_and_trim_black_bars(img: Image.Image, tolerance: int = 25) -> Image.Image:
     """
-    유튜브 4:3 썸네일(hqdefault, sddefault)의 상/하단 레터박스 블랙바 및
-    필러박스 블랙바를 정밀 감지하여 잘라냅니다.
-    이미 1:1 정방형인 이미지나 유효한 콘텐츠는 보호됩니다.
+    유튜브 썸네일의 상/하단 레터박스 및 좌/우 필러박스 블랙바를 정밀 감지하여 잘라냅니다.
+    이미 1:1 정방형인 이미지나 원본 앨범아트는 손상 없이 보호됩니다.
     """
     w, h = img.size
     # 이미 정방형에 가까운 경우(앨범아트 원본 등) 블랙바 탐색을 건너뜀
@@ -21,66 +20,24 @@ def detect_and_trim_black_bars(img: Image.Image, tolerance: int = 25) -> Image.I
     if img.mode != 'RGB':
         img = img.convert('RGB')
 
-    # 1. 상단 블랙바 검사 (최대 높이의 25%까지 탐색)
-    top = 0
-    max_top_search = int(h * 0.25)
-    step_x = max(1, w // 50)
-    for y in range(max_top_search):
-        is_row_black = all(
-            all(c <= tolerance for c in img.getpixel((x, y)))
-            for x in range(0, w, step_x)
-        )
-        if is_row_black:
-            top = y + 1
-        else:
-            break
+    # 그레이스케일 변환 및 블랙 임계값 필터링 (압축 노이즈 필터링)
+    gray = img.convert('L')
+    lut = [0 if i <= tolerance else 255 for i in range(256)]
+    bw = gray.point(lut, mode='L')
+    bbox = bw.getbbox()
 
-    # 2. 하단 블랙바 검사 (최대 높이의 25%까지 탐색)
-    bottom = h
-    min_bottom_search = int(h * 0.75)
-    for y in range(h - 1, min_bottom_search, -1):
-        is_row_black = all(
-            all(c <= tolerance for c in img.getpixel((x, y)))
-            for x in range(0, w, step_x)
-        )
-        if is_row_black:
-            bottom = y
-        else:
-            break
+    if not bbox:
+        return img
 
-    # 3. 좌측 필러박스 검사 (최대 너비의 25%까지 탐색)
-    left = 0
-    max_left_search = int(w * 0.25)
-    step_y = max(1, h // 50)
-    for x in range(max_left_search):
-        is_col_black = all(
-            all(c <= tolerance for c in img.getpixel((x, y)))
-            for y in range(top, bottom, step_y)
-        )
-        if is_col_black:
-            left = x + 1
-        else:
-            break
-
-    # 4. 우측 필러박스 검사 (최대 너비의 25%까지 탐색)
-    right = w
-    min_right_search = int(w * 0.75)
-    for x in range(w - 1, min_right_search, -1):
-        is_col_black = all(
-            all(c <= tolerance for c in img.getpixel((x, y)))
-            for y in range(top, bottom, step_y)
-        )
-        if is_col_black:
-            right = x
-        else:
-            break
-
-    # 유효 영역 검증 후 크롭
+    left, top, right, bottom = bbox
     new_w = right - left
     new_h = bottom - top
-    if new_w >= 50 and new_h >= 50:
-        if top > 5 or bottom < h - 5 or left > 5 or right < w - 5:
+
+    # 최소 80x80 이상의 유효 콘텐츠가 있고 가장자리에 유의미한 블랙바가 있는 경우 크롭
+    if new_w >= 80 and new_h >= 80:
+        if top > 5 or (h - bottom) > 5 or left > 5 or (w - right) > 5:
             return img.crop((left, top, right, bottom))
+
     return img
 
 

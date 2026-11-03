@@ -17,6 +17,7 @@ from .lyrics import resolve_lyrics
 from .tagger import tag_audio_file
 from .alsong import clean_search_term
 from .metadata_resolver import resolve_album_metadata
+from .korean_util import refine_korean_metadata, prefer_korean_artist, prefer_korean_title
 from .cookie_util import strip_ansi_codes, is_browser_cookie_locked
 
 
@@ -173,6 +174,8 @@ class YoutubeMusicDownloader:
             'quiet': True,
             'no_warnings': True,
             'remote_components': ['ejs:github'],
+            'geo_bypass_country': 'KR',
+            'http_headers': {'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'},
         }
         self._apply_cookie_opts(ydl_opts)
 
@@ -193,9 +196,12 @@ class YoutubeMusicDownloader:
             is_album = bool("olak5uy_" in target_url.lower() or 'album' in str(info.get('title', '')).lower())
             tracks = []
             for idx, entry in enumerate(entries_list, start=1):
+                raw_t = entry.get('title') or f"Track {idx}"
+                raw_a = entry.get('artist') or entry.get('uploader') or ""
+                k_artist, k_title = refine_korean_metadata(raw_t, raw_a, clean_search_term(raw_t))
                 tracks.append({
-                    'title': entry.get('title') or f"Track {idx}",
-                    'artist': entry.get('artist') or entry.get('uploader') or "",
+                    'title': k_title or raw_t,
+                    'artist': k_artist or raw_a,
                     'album': entry.get('album') or info.get('title') or "",
                     'duration': entry.get('duration'),
                     'url': entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}",
@@ -207,9 +213,12 @@ class YoutubeMusicDownloader:
             return tracks
         else:
             # 단일 곡인 경우
+            raw_t = info.get('title') or "Unknown Track"
+            raw_a = info.get('artist') or info.get('uploader') or ""
+            k_artist, k_title = refine_korean_metadata(raw_t, raw_a, clean_search_term(raw_t))
             return [{
-                'title': info.get('title') or "Unknown Track",
-                'artist': info.get('artist') or info.get('uploader') or "",
+                'title': k_title or raw_t,
+                'artist': k_artist or raw_a,
                 'album': info.get('album') or "",
                 'duration': info.get('duration'),
                 'url': url,
@@ -258,6 +267,8 @@ class YoutubeMusicDownloader:
             'quiet': True,
             'no_warnings': True,
             'remote_components': ['ejs:github'],
+            'geo_bypass_country': 'KR',
+            'http_headers': {'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'},
         }
 
         if self.ffmpeg_path:
@@ -346,33 +357,21 @@ class YoutubeMusicDownloader:
         # 메타데이터 구성 (원본 앨범 트랙 정보 조회 보강)
         meta = self._extract_metadata(info, track_index, total_tracks, is_album_playlist=is_album)
 
-        # 앨범 커버 수집 (우선순위: 1. iTunes 공식 1000x1000 아트 -> 2. YouTube Music 1:1 정방형 아트 -> 3. 영상 썸네일 블랙바 보정)
+        # 앨범 커버 수집 (영상/음원 본연의 썸네일/아트만 사용, 제3자 검색 아트 배제하여 이미지 불일치 차단)
         cover_bytes = None
 
-        # 1순위: iTunes 공식 고화질 1000x1000 스튜디오 앨범아트
-        if meta.artwork_url:
-            try:
-                req = urllib.request.Request(meta.artwork_url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    art_data = resp.read()
-                    cover_bytes = process_cover_image(
-                        art_data,
-                        crop_to_square=self.options.crop_square_cover
-                    )
-            except Exception:
-                cover_bytes = None
-
-        # 2순위: YouTube Music 전용 1:1 고화질 앨범아트 (googleusercontent 등)
-        if not cover_bytes and info.get('thumbnails'):
+        # 1순위: YouTube Music 전용 1:1 고화질 앨범아트 (googleusercontent 등)
+        # =w1200-h1200 스튜디오급 고해상도 리사이즈 및 1:1 정방형 썸네일 탐색
+        if info.get('thumbnails'):
             best_yt_square_url = None
             for t in info.get('thumbnails', []):
                 t_url = t.get('url', '')
                 w = t.get('width')
                 h = t.get('height')
-                if 'googleusercontent' in t_url:
-                    best_yt_square_url = re.sub(r'=w\d+-h\d+', '=w1200-h1200', t_url)
+                if 'googleusercontent.com' in t_url:
+                    best_yt_square_url = re.sub(r'=w\d+-h\d+.*', '=w1200-h1200-l90-rj', t_url)
                     break
-                elif w and h and w == h and w >= 200:
+                elif w and h and w == h and w >= 250:
                     best_yt_square_url = t_url
             if best_yt_square_url:
                 try:
@@ -386,7 +385,7 @@ class YoutubeMusicDownloader:
                 except Exception:
                     cover_bytes = None
 
-        # 3순위: 다운로드된 로컬 썸네일 파일 (블랙바 자동 보정 적용)
+        # 2순위: 다운로드된 해당 영상의 로컬 썸네일 파일 (블랙바 자동 보정 적용)
         thumb_candidates = (
             glob.glob(os.path.join(self.options.output_dir, f"{temp_prefix}*.jpg")) +
             glob.glob(os.path.join(self.options.output_dir, f"{temp_prefix}*.webp")) +
@@ -409,7 +408,7 @@ class YoutubeMusicDownloader:
             except Exception:
                 pass
 
-        # 4순위: meta.thumbnail_url 백업
+        # 3순위: meta.thumbnail_url 백업
         if not cover_bytes and meta.thumbnail_url:
             try:
                 req = urllib.request.Request(meta.thumbnail_url, headers={'User-Agent': 'Mozilla/5.0'})
@@ -504,20 +503,19 @@ class YoutubeMusicDownloader:
         total_tracks: int,
         is_album_playlist: bool = False
     ) -> TrackMetadata:
-        """yt-dlp 정보 및 iTunes 메타데이터 조회를 결합하여 원본 앨범의 정확한 곡 정보 구성"""
+        """yt-dlp 정보 및 원본 앨범 조회를 결합하여 정확한 한글 곡 정보 구성"""
         raw_title = info.get('title') or ""
-        artist = info.get('artist') or info.get('creator') or info.get('uploader') or ""
+        raw_artist = info.get('artist') or info.get('creator') or info.get('uploader') or ""
         album = info.get('album') or ""
 
-        # 아티스트 - 제목 형태 분리 시도
-        clean_title = raw_title
-        if " - " in raw_title and not info.get('artist'):
-            parts = raw_title.split(" - ", 1)
-            artist = parts[0].strip()
-            clean_title = parts[1].strip()
-
-        clean_title = clean_search_term(clean_title)
-        artist = clean_search_term(artist)
+        # 한국어 우선 아티스트 및 곡명 정제
+        k_artist, k_title = refine_korean_metadata(
+            raw_title=raw_title,
+            artist=raw_artist,
+            clean_title=clean_search_term(raw_title)
+        )
+        artist = k_artist or raw_artist
+        clean_title = k_title or clean_search_term(raw_title)
 
         release_year = None
         if info.get('release_year'):
@@ -546,12 +544,11 @@ class YoutubeMusicDownloader:
                 orig_total_tracks = resolved['total_tracks']
             if (not album or album == clean_title) and resolved.get('album'):
                 album = resolved['album']
-            if (not artist or artist == "Unknown Artist") and resolved.get('artist'):
-                artist = resolved['artist']
+            if not artist or artist == "Unknown Artist":
+                if resolved.get('artist'):
+                    artist = prefer_korean_artist(resolved['artist'])
             if not release_year and resolved.get('release_year'):
                 release_year = resolved['release_year']
-
-        artwork_url = resolved.get('artwork_url') if resolved else None
 
         # 만약 원본 앨범 조회가 불가능한 경우:
         # 재생목록이 원본 앨범 자체(OLAK5uy_ 등)인 경우에만 track_index 적용,
@@ -569,7 +566,7 @@ class YoutubeMusicDownloader:
             total_tracks=orig_total_tracks,
             duration_seconds=info.get('duration'),
             thumbnail_url=thumb_url,
-            artwork_url=artwork_url,
+            artwork_url=None,
             source_url=info.get('webpage_url') or ""
         )
 

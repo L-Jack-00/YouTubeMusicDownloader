@@ -72,16 +72,13 @@ def resolve_album_metadata(
                     artist_name = matched.get("artistName")
                     release_date = matched.get("releaseDate")
                     release_year = release_date[:4] if release_date and len(release_date) >= 4 else None
-                    artwork_raw = matched.get("artworkUrl100", "")
-                    artwork_url = artwork_raw.replace("100x100bb", "1000x1000bb") if artwork_raw else None
 
                     return {
                         "track_number": track_number,
                         "total_tracks": track_count,
                         "album": collection_name,
                         "artist": artist_name,
-                        "release_year": release_year,
-                        "artwork_url": artwork_url
+                        "release_year": release_year
                     }
         except Exception:
             continue
