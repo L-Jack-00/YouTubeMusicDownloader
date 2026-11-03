@@ -106,6 +106,13 @@ class TestStateAndDownloader(unittest.TestCase):
         title3 = "고백 (Go Back) [MV] (Feat. 정인) (feat. 정인)"
         self.assertEqual(clean_display_title(title3), "고백 (Go Back) (Feat. 정인)")
 
+    def test_fetch_ytmusic_canonical_resolution(self):
+        from core.downloader import fetch_ytmusic_localized_metadata
+        # dJRkhdWsu_M (재생불가 유령 영상) -> O4ZZJ_ek2gs (정식 대체 음원) 다이렉트 추적 검증
+        ytm_t, ytm_a, canon_id = fetch_ytmusic_localized_metadata("dJRkhdWsu_M")
+        self.assertEqual(canon_id, "O4ZZJ_ek2gs")
+        self.assertIsNotNone(ytm_t)
+
 
 if __name__ == '__main__':
     unittest.main()

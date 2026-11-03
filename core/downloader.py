@@ -131,17 +131,19 @@ def deduplicate_featuring_tags(title: str) -> str:
     return re.sub(r'\s+', ' ', ''.join(result)).strip()
 
 
-_ytmusic_meta_cache: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+_ytmusic_meta_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]]] = {}
 
 
-def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tuple[Optional[str], Optional[str]]:
+def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    유튜브 뮤직(music.youtube.com) 웹페이지 메타태그에서 구글 음악 지식 그래프가 매핑한 한국어 현지화 곡명과 아티스트명을 조회합니다.
+    유튜브 뮤직(music.youtube.com) 웹페이지 메타태그에서 구글 음악 지식 그래프가 매핑한
+    한국어 현지화 곡명, 아티스트명, 및 정식 대체 Canonical Video ID를 조회합니다.
     - og:title -> 곡명 (예: Sick Enough to Die -> 죽을 만큼 아파서)
     - og:description -> 아티스트명 (예: Supreme Team -> 슈프림팀, Leessang -> 리쌍)
+    - canonical_id -> 정식 대체 음원 ID (예: 재생불가 dJRkhdWsu_M -> 정식 음원 O4ZZJ_ek2gs)
     """
     if not video_id:
-        return None, None
+        return None, None, None
     if video_id in _ytmusic_meta_cache:
         return _ytmusic_meta_cache[video_id]
 
@@ -164,11 +166,25 @@ def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tup
         if ytm_title and ytm_title.endswith(" - YouTube Music"):
             ytm_title = ytm_title[:-16].strip()
 
-        _ytmusic_meta_cache[video_id] = (ytm_title, ytm_artist)
-        return ytm_title, ytm_artist
+        # 정식 대체 Canonical Video ID 추출 (<link rel="canonical">, <meta property="og:url">, watchEndpoint)
+        canonical_id = None
+        canon_m = re.search(r'<link\s+rel="canonical"\s+href="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
+        if canon_m:
+            canonical_id = canon_m.group(1)
+        else:
+            og_url_m = re.search(r'<meta\s+property="og:url"\s+content="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
+            if og_url_m:
+                canonical_id = og_url_m.group(1)
+            else:
+                ep_m = re.search(r'"watchEndpoint":\{"videoId":"([a-zA-Z0-9_-]{11})"', content)
+                if ep_m:
+                    canonical_id = ep_m.group(1)
+
+        _ytmusic_meta_cache[video_id] = (ytm_title, ytm_artist, canonical_id)
+        return ytm_title, ytm_artist, canonical_id
     except Exception:
-        _ytmusic_meta_cache[video_id] = (None, None)
-        return None, None
+        _ytmusic_meta_cache[video_id] = (None, None, None)
+        return None, None, None
 
 
 def ensure_js_runtime():
@@ -329,18 +345,27 @@ class YoutubeMusicDownloader:
                     if id_m:
                         video_id = id_m.group(1)
 
-                track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(entry.get('url') or "")
+                # 유튜브 뮤직 지식 그래프 매핑 및 정식 대체 Canonical ID 확인
+                if video_id:
+                    ytm_t, ytm_a, canon_id = fetch_ytmusic_localized_metadata(video_id)
+                    # 유령 영상(UNPLAYABLE)인 경우 정식 대체 음원 ID로 자동 연결
+                    if canon_id and canon_id != video_id:
+                        video_id = canon_id
 
-                # 유튜브 뮤직 지식 그래프 매핑 확인 (제목이나 아티스트에 한글이 없는 경우)
-                if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in disp_title) or (raw_a and not any('\uac00' <= c <= '\ud7a3' for c in raw_a))):
-                    ytm_t, ytm_a = fetch_ytmusic_localized_metadata(video_id)
                     if ytm_t and any('\uac00' <= c <= '\ud7a3' for c in ytm_t):
                         feat_m = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', disp_title, flags=re.IGNORECASE)
                         if feat_m and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_t, flags=re.IGNORECASE):
                             ytm_t = f"{ytm_t} {feat_m.group(1)}"
                         disp_title = clean_display_title(ytm_t)
+                    elif ytm_t and not disp_title:
+                        disp_title = clean_display_title(ytm_t)
+
                     if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
                         raw_a = ytm_a
+                    elif ytm_a and not raw_a:
+                        raw_a = ytm_a
+
+                track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(entry.get('url') or "")
 
                 tracks.append({
                     'title': disp_title or raw_t,
@@ -384,18 +409,26 @@ class YoutubeMusicDownloader:
                 if id_m:
                     video_id = id_m.group(1)
 
-            # 재생목록 파라미터가 완전히 제거된 순수 단일 음원 URL 보장
-            track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(url)
+            if video_id:
+                ytm_t, ytm_a, canon_id = fetch_ytmusic_localized_metadata(video_id)
+                if canon_id and canon_id != video_id:
+                    video_id = canon_id
 
-            if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in disp_title) or (raw_a and not any('\uac00' <= c <= '\ud7a3' for c in raw_a))):
-                ytm_t, ytm_a = fetch_ytmusic_localized_metadata(video_id)
                 if ytm_t and any('\uac00' <= c <= '\ud7a3' for c in ytm_t):
                     feat_m = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', disp_title, flags=re.IGNORECASE)
                     if feat_m and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_t, flags=re.IGNORECASE):
                         ytm_t = f"{ytm_t} {feat_m.group(1)}"
                     disp_title = clean_display_title(ytm_t)
-                if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                elif ytm_t and not disp_title:
+                    disp_title = clean_display_title(ytm_t)
+
+                if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a):
                     raw_a = ytm_a
+                elif ytm_a and not raw_a:
+                    raw_a = ytm_a
+
+            # 재생목록 파라미터가 완전히 제거된 순수 단일 음원 URL 보장
+            track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(url)
 
             return [{
                 'title': disp_title or raw_t,
@@ -437,6 +470,15 @@ class YoutubeMusicDownloader:
         clean_track_url = strip_playlist_params(url)
         id_match = re.search(r'[?&]v=([a-zA-Z0-9_-]+)', clean_track_url)
         video_id = id_match.group(1) if id_match else f"{track_index}_{os.getpid()}"
+
+        # 유튜브 뮤직 정식 대체 Canonical Video ID 사전 확인 (유령 영상/UNPLAYABLE 방지)
+        if id_match:
+            orig_vid = id_match.group(1)
+            _, _, canon_id = fetch_ytmusic_localized_metadata(orig_vid)
+            if canon_id and canon_id != orig_vid:
+                video_id = canon_id
+                clean_track_url = f"https://www.youtube.com/watch?v={canon_id}"
+
         temp_prefix = f"_ytm_{video_id}"
 
         # yt-dlp 옵션 구성 (전용 temp_prefix로 격리 다운로드)
@@ -451,6 +493,10 @@ class YoutubeMusicDownloader:
             'no_warnings': True,
             'remote_components': ['ejs:github'],
             'geo_bypass_country': 'KR',
+            'retries': 15,
+            'fragment_retries': 15,
+            'socket_timeout': 15.0,
+            'file_access_retries': 5,
             'extractor_args': {
                 'youtube': {
                     'lang': ['ko'],
@@ -499,6 +545,7 @@ class YoutubeMusicDownloader:
 
         ydl_opts['progress_hooks'] = [ydl_progress_hook]
 
+        info = None
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(clean_track_url, download=True)
@@ -507,10 +554,43 @@ class YoutubeMusicDownloader:
                 progress_cb(DownloadState.CANCELLED, 0.0, "작업이 취소되었습니다.")
             return None
         except Exception as e:
-            friendly_msg = _format_friendly_error(str(e), self.options.browser_name)
-            if progress_cb:
-                progress_cb(DownloadState.ERROR, 0.0, f"다운로드 오류: {friendly_msg}")
-            return None
+            err_str = str(e)
+            err_lower = err_str.lower()
+
+            # 1. 유령 영상 (UNPLAYABLE / 동영상을 볼 수 없음) 오류 감지 시 정식 대체 Canonical ID로 즉시 재시도
+            is_unplayable = any(kw in err_lower for kw in ['unplayable', '동영상을 볼 수 없습니다', '동영상을 재생할 수 없음', 'not available'])
+            if is_unplayable and not self._is_cancelled:
+                _, _, canon_id = fetch_ytmusic_localized_metadata(video_id)
+                if canon_id and canon_id != video_id:
+                    if progress_cb:
+                        progress_cb(DownloadState.SCANNING, 15.0, f"[{track_index}/{total_tracks}] 정식 대체 음원 링크 감지 -> 자동 연결 중...")
+                    try:
+                        clean_track_url = f"https://www.youtube.com/watch?v={canon_id}"
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl_canon:
+                            info = ydl_canon.extract_info(clean_track_url, download=True)
+                    except Exception as e_canon:
+                        err_str = str(e_canon)
+                        err_lower = err_str.lower()
+
+            # 2. 구글 CDN 연결 단절 (10054 ConnectionReset / Timeout) 감지 시 포맷 제한을 푼 'bestaudio/best'로 자동 재시도
+            if (not info or not isinstance(info, dict)) and not self._is_cancelled:
+                is_conn_error = any(kw in err_lower for kw in ['connectionreseterror', '10054', 'connection aborted', 'timed out', 'timeout', 'network is unreachable'])
+                if is_conn_error:
+                    if progress_cb:
+                        progress_cb(DownloadState.DOWNLOADING, 20.0, f"[{track_index}/{total_tracks}] 구글 CDN 연결 재설정 감지 -> 대체 고음질 스트림으로 자동 재연결 중...")
+                    try:
+                        fallback_opts = dict(ydl_opts)
+                        fallback_opts['format'] = 'bestaudio/best'
+                        with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
+                            info = ydl_fb.extract_info(clean_track_url, download=True)
+                    except Exception as e_fb:
+                        err_str = str(e_fb)
+
+            if not info or not isinstance(info, dict):
+                friendly_msg = _format_friendly_error(err_str, self.options.browser_name)
+                if progress_cb:
+                    progress_cb(DownloadState.ERROR, 0.0, f"다운로드 오류: {friendly_msg}")
+                return None
 
         if self._is_cancelled:
             self._cleanup_temp_files(self.options.output_dir, temp_prefix)
@@ -734,7 +814,7 @@ class YoutubeMusicDownloader:
                 video_id = id_m.group(1)
 
         if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in display_title) or (artist and not any('\uac00' <= c <= '\ud7a3' for c in artist))):
-            ytm_title, ytm_artist = fetch_ytmusic_localized_metadata(video_id)
+            ytm_title, ytm_artist, _ = fetch_ytmusic_localized_metadata(video_id)
             if ytm_title and any('\uac00' <= c <= '\ud7a3' for c in ytm_title):
                 feat_match = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', clean_title, flags=re.IGNORECASE)
                 if feat_match and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_title, flags=re.IGNORECASE):
