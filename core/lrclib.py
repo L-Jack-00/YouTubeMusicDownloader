@@ -12,7 +12,7 @@ from .alsong import clean_search_term
 LRCLIB_GET_URL = "https://lrclib.net/api/get"
 LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 LRCLIB_HEADERS = {
-    "User-Agent": "ytmusic-dl/1.3.3 (https://github.com/L-Jack-00/ytmusic-dl)",
+    "User-Agent": "ytmusic-dl/1.3.4 (https://github.com/L-Jack-00/ytmusic-dl)",
     "Accept": "application/json",
 }
 

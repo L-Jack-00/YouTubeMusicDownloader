@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """
-Google CDN & LRCLIB Dual-Tier High-Precision Lyrics Engine.
-Features 503 anti-crash exponential backoff harness and millisecond-accurate sync lyrics.
+Multi-Tier High-Precision Lyrics Engine.
+Priority Order:
+  1. AlSong (알송 - K-POP 및 국내 최강자 싱크 가사)
+  2. LRCLIB (글로벌 오픈소스 싱크 가사 DB + 503 방어 백오프 하네스)
+  3. Musixmatch (글로벌 최대 상용 싱크 가사 DB)
+  4. YouTube Subtitles (구글 CDN 공식/자동 자막 변환)
+  5. YouTube Description (영상 설명란 공식 가사 폴백)
 """
 import re
 from typing import Optional, Tuple
+from .alsong import fetch_alsong_lyrics
 from .lrclib import fetch_lrclib_lyrics, get_artist_search_candidates
+from .musixmatch import fetch_musixmatch_lyrics
 
 
 def parse_subtitles_to_lrc(sub_text: str) -> Tuple[Optional[str], bool, str]:
@@ -104,20 +111,31 @@ def resolve_lyrics(
     description: Optional[str] = None
 ) -> Tuple[Optional[str], bool, str]:
     """
-    통합 3계층 고정밀 가사 수집 파이프라인:
-    1순위: Google CDN 유튜브 공식/자동 자막 (타임스탬프 변환)
-    2순위: LRCLIB 고성능 싱크 가사 DB (503 지수 백오프 하네스 + 다중 후보 정밀 매칭)
-    3순위: 영상 설명란(Description) 공식 가사 텍스트 추출 (일반 가사 폴백)
+    5계층 고정밀 가사 수집 파이프라인:
+    1순위: 알송 (AlSong - K-POP 및 국내 최강자 싱크 가사)
+    2순위: LRCLIB (글로벌 오픈소스 싱크 가사 DB + 503 방어 백오프 하네스)
+    3순위: Musixmatch (글로벌 최대 상용 싱크 가사 DB)
+    4순위: Google CDN 유튜브 공식/자동 자막 변환
+    5순위: 영상 설명란(Description) 공식 가사 텍스트 추출 (일반 가사 폴백)
 
     반환값: (가사 내용, 싱크 가사 여부, 제공 출처)
     """
-    # 1순위: 구글 CDN에서 다운로드된 유튜브 공식/자동 자막 변환
-    if embedded_subtitles and len(embedded_subtitles.strip()) > 10:
-        lrc_text, is_synced, source = parse_subtitles_to_lrc(embedded_subtitles)
-        if lrc_text:
-            return (lrc_text, is_synced, source)
+    plain_fallback: Optional[Tuple[str, str]] = None  # (가사내용, 출처)
 
-    # 2순위: LRCLIB 실시간 싱크 가사 DB 검색 (503 에러 방어 하네스 탑재)
+    # 1순위: 알송 (AlSong) 싱크 가사 조회
+    if title:
+        try:
+            alsong_res = fetch_alsong_lyrics(title=title, artist=artist, timeout=4)
+            if alsong_res:
+                alsong_text, alsong_synced = alsong_res
+                if alsong_synced:
+                    return (alsong_text, True, "AlSong (Synced)")
+                elif not plain_fallback:
+                    plain_fallback = (alsong_text, "AlSong (Plain)")
+        except Exception:
+            pass
+
+    # 2순위: LRCLIB 고성능 실시간 싱크 가사 조회 (503 에러 방어 하네스 탑재)
     if title:
         try:
             lrclib_res = fetch_lrclib_lyrics(
@@ -125,16 +143,50 @@ def resolve_lyrics(
                 artist=artist,
                 album=album,
                 duration_seconds=duration_seconds,
-                timeout=5
+                timeout=4
             )
             if lrclib_res:
-                lyrics_text, is_synced = lrclib_res
-                src = "LRCLIB (Synced)" if is_synced else "LRCLIB (Plain)"
-                return (lyrics_text, is_synced, src)
+                lrclib_text, lrclib_synced = lrclib_res
+                if lrclib_synced:
+                    return (lrclib_text, True, "LRCLIB (Synced)")
+                elif not plain_fallback:
+                    plain_fallback = (lrclib_text, "LRCLIB (Plain)")
         except Exception:
             pass
 
-    # 3순위: 영상 설명란(Description) 내 공식 가사 블록 추출 (일반 가사)
+    # 3순위: Musixmatch 글로벌 싱크 가사 조회
+    if title:
+        try:
+            mxm_res = fetch_musixmatch_lyrics(
+                title=title,
+                artist=artist,
+                album=album,
+                duration_seconds=duration_seconds,
+                timeout=4
+            )
+            if mxm_res:
+                mxm_text, mxm_synced = mxm_res
+                if mxm_synced:
+                    return (mxm_text, True, "Musixmatch (Synced)")
+                elif not plain_fallback:
+                    plain_fallback = (mxm_text, "Musixmatch (Plain)")
+        except Exception:
+            pass
+
+    # 4순위: 구글 CDN 유튜브 공식/자동 자막 변환
+    if embedded_subtitles and len(embedded_subtitles.strip()) > 10:
+        sub_text, sub_synced, sub_source = parse_subtitles_to_lrc(embedded_subtitles)
+        if sub_text:
+            if sub_synced:
+                return (sub_text, True, sub_source)
+            elif not plain_fallback:
+                plain_fallback = (sub_text, sub_source)
+
+    # 싱크 가사를 못 찾았으나 상위 단계에서 줄글 가사를 찾은 경우 반환
+    if plain_fallback:
+        return (plain_fallback[0], False, plain_fallback[1])
+
+    # 5순위: 영상 설명란(Description) 내 공식 가사 블록 추출 (일반 가사)
     if description:
         desc_lyrics = extract_lyrics_from_description(description)
         if desc_lyrics:

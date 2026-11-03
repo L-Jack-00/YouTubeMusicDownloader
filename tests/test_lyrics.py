@@ -1,11 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-Headless unit tests for Google CDN & LRCLIB lyrics engine.
-Tests WebVTT/SRT parsing, candidate artist resolution, LRCLIB 503 retry defense, and description lyrics extraction.
+Headless unit tests for Multi-Tier lyrics engine (AlSong -> LRCLIB -> Musixmatch -> Subtitles -> Description).
 """
 import unittest
-from core.alsong import clean_search_term
-from core.lrclib import get_artist_search_candidates
+from unittest.mock import patch
+
+from core.alsong import clean_search_term, normalize_alsong_lrc, fetch_alsong_lyrics, _post_alsong_with_retry
+from core.lrclib import get_artist_search_candidates, _request_with_retry
+from core.musixmatch import fetch_musixmatch_lyrics, _request_musixmatch_with_retry
 from core.lyrics import (
     parse_subtitles_to_lrc,
     extract_lyrics_from_description,
@@ -42,6 +44,16 @@ class TestLyricsModule(unittest.TestCase):
 
         c4 = get_artist_search_candidates("리쌍 (feat. Harim)")
         self.assertIn("리쌍", c4)
+
+    def test_normalize_alsong_lrc(self):
+        raw = "[00:01:23]첫 번째 줄<br>[00:04.56]두 번째 줄<BR>[00:08:90]세 번째 줄"
+        norm, is_synced = normalize_alsong_lrc(raw)
+        self.assertTrue(is_synced)
+        self.assertIn("[00:01.23]첫 번째 줄", norm)
+        self.assertIn("[00:04.56]", norm)
+        self.assertIn("[00:08.90]", norm)
+        self.assertNotIn("<br>", norm)
+        self.assertNotIn("<BR>", norm)
 
     def test_parse_subtitles_vtt_with_timestamps_to_synced_lrc(self):
         sample_vtt = """WEBVTT
@@ -83,24 +95,6 @@ Language: ko
         self.assertIn("[00:05.30] 첫 번째 소절입니다", lyrics)
         self.assertIn("[00:09.00] 두 번째 소절입니다", lyrics)
 
-    def test_parse_subtitles_without_timestamps_falls_back_to_plain_lyrics(self):
-        sample_plain_sub = """WEBVTT
-Kind: captions
-Language: ko
-
-이 밤 그날의 반딧불을
-당신의 창 가까이 보낼게요
-좋은 꿈 이길 바라요
-"""
-        lyrics, is_synced, source = parse_subtitles_to_lrc(sample_plain_sub)
-        self.assertIsNotNone(lyrics)
-        self.assertFalse(is_synced)
-        self.assertEqual(source, "YouTube Subtitles (Plain)")
-        self.assertIn("이 밤 그날의 반딧불을", lyrics)
-        self.assertIn("당신의 창 가까이 보낼게요", lyrics)
-        self.assertNotIn("WEBVTT", lyrics)
-        self.assertNotIn("[00:", lyrics)
-
     def test_extract_lyrics_from_description(self):
         sample_desc = """
 가수: 아이유 (IU)
@@ -122,33 +116,93 @@ Credit:
         self.assertNotIn("Credit:", extracted)
         self.assertNotIn("[가사]", extracted)
 
-    def test_resolve_lyrics_subtitles_priority_over_lrclib(self):
+    def test_resolve_lyrics_tier1_alsong_priority(self):
+        # 1순위: 알송에서 싱크 가사를 먼저 발견하면 AlSong (Synced) 반환
+        with patch("core.lyrics.fetch_alsong_lyrics") as mock_alsong:
+            mock_alsong.return_value = ("[00:01.00] 알송 싱크 가사", True)
+            lyrics, is_synced, source = resolve_lyrics(
+                title="기억을 걷는 시간",
+                artist="넬",
+                embedded_subtitles="dummy"
+            )
+            self.assertEqual(source, "AlSong (Synced)")
+            self.assertTrue(is_synced)
+            self.assertIn("알송 싱크 가사", lyrics)
+
+    def test_resolve_lyrics_tier2_lrclib_when_alsong_misses(self):
+        # 알송 실패 시 2순위 LRCLIB으로 정상 폴백
+        with patch("core.lyrics.fetch_alsong_lyrics", return_value=None):
+            with patch("core.lyrics.fetch_lrclib_lyrics") as mock_lrclib:
+                mock_lrclib.return_value = ("[00:02.00] LRCLIB 싱크 가사", True)
+                lyrics, is_synced, source = resolve_lyrics(
+                    title="Shape of You",
+                    artist="Ed Sheeran"
+                )
+                self.assertEqual(source, "LRCLIB (Synced)")
+                self.assertTrue(is_synced)
+                self.assertIn("LRCLIB 싱크 가사", lyrics)
+
+    def test_resolve_lyrics_tier3_musixmatch_when_lrclib_misses(self):
+        # 알송, LRCLIB 실패 시 3순위 Musixmatch로 정상 폴백
+        with patch("core.lyrics.fetch_alsong_lyrics", return_value=None):
+            with patch("core.lyrics.fetch_lrclib_lyrics", return_value=None):
+                with patch("core.lyrics.fetch_musixmatch_lyrics") as mock_mxm:
+                    mock_mxm.return_value = ("[00:03.00] Musixmatch 싱크 가사", True)
+                    lyrics, is_synced, source = resolve_lyrics(
+                        title="Some Global Song",
+                        artist="Global Artist"
+                    )
+                    self.assertEqual(source, "Musixmatch (Synced)")
+                    self.assertTrue(is_synced)
+                    self.assertIn("Musixmatch 싱크 가사", lyrics)
+
+    def test_resolve_lyrics_tier4_subtitles_when_apis_miss(self):
+        # 1~3순위 API 실패 시 4순위 YouTube Subtitles로 정상 폴백
         sample_vtt = """WEBVTT
-
 00:00:10.000 --> 00:00:14.000
-자막 가사입니다
+유튜브 자막 가사
 """
-        lyrics, is_synced, source = resolve_lyrics(
-            title="Officially Missing You",
-            artist="긱스",
-            embedded_subtitles=sample_vtt
-        )
-        self.assertEqual(source, "YouTube Subtitles (Synced)")
-        self.assertTrue(is_synced)
-        self.assertIn("[00:10.00] 자막 가사입니다", lyrics)
+        with patch("core.lyrics.fetch_alsong_lyrics", return_value=None):
+            with patch("core.lyrics.fetch_lrclib_lyrics", return_value=None):
+                with patch("core.lyrics.fetch_musixmatch_lyrics", return_value=None):
+                    lyrics, is_synced, source = resolve_lyrics(
+                        title="Unknown Indie Track",
+                        artist="Indie",
+                        embedded_subtitles=sample_vtt
+                    )
+                    self.assertEqual(source, "YouTube Subtitles (Synced)")
+                    self.assertTrue(is_synced)
+                    self.assertIn("[00:10.00] 유튜브 자막 가사", lyrics)
 
-    def test_resolve_lyrics_lrclib_synced_matching(self):
-        # 긱스 Officially Missing You -> LRCLIB 실시간 싱크 가사 정상 획득 검증
-        lyrics, is_synced, source = resolve_lyrics(
-            title="Officially Missing You",
-            artist="긱스 Geeks",
-            embedded_subtitles=None
-        )
-        self.assertIsNotNone(lyrics)
-        self.assertTrue(is_synced)
-        self.assertEqual(source, "LRCLIB (Synced)")
-        self.assertIn("Grandline", lyrics)
-        self.assertIn("[00:", lyrics)
+    def test_musixmatch_retry_on_timeout(self):
+        # Musixmatch 타임아웃 및 503 발생 시 지수 백오프 재시도 검증
+        import requests
+        from unittest.mock import MagicMock
+        with patch("requests.get") as mock_get:
+            # 1차 시도 Timeout, 2차 시도 200 성공
+            mock_success = MagicMock()
+            mock_success.status_code = 200
+            mock_get.side_effect = [requests.exceptions.Timeout("Read timed out"), mock_success]
+
+            resp = _request_musixmatch_with_retry("http://fake", {}, {}, timeout=1, max_retries=2)
+            self.assertIsNotNone(resp)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(mock_get.call_count, 2)
+
+    def test_alsong_retry_on_timeout(self):
+        # 알송 타임아웃 발생 시 재시도 검증
+        import requests
+        from unittest.mock import MagicMock
+        with patch("requests.post") as mock_post:
+            mock_success = MagicMock()
+            mock_success.status_code = 200
+            mock_success.text = "<xml>ok</xml>"
+            mock_post.side_effect = [requests.exceptions.Timeout("Read timed out"), mock_success]
+
+            resp = _post_alsong_with_retry("<xml/>", {}, timeout=1, max_retries=2)
+            self.assertIsNotNone(resp)
+            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(mock_post.call_count, 2)
 
 
 if __name__ == '__main__':

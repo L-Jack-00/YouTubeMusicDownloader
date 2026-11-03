@@ -764,6 +764,9 @@ class YtMusicDownloader:
             )
             meta.lyrics = lyrics_text
             meta.is_synced_lyrics = is_synced
+            if progress_cb and source_name != "None":
+                sync_label = "싱크 가사" if is_synced else "일반 가사"
+                progress_cb(DownloadState.FETCHING_LYRICS, 80.0, f"[{track_index}/{total_tracks}] {sync_label} 연동 완료 ({source_name})")
 
         # 파일 이름 형식 적용 및 이름 변경
         naming_fmt = getattr(self.options, 'naming_format', 'artist_title')

@@ -178,7 +178,7 @@ class MainWindow(QMainWindow):
         self.chk_lyrics = QCheckBox("음원 태그 및 가사 자동 삽입")
         self.chk_lyrics.setChecked(True)
         self.chk_lrc_file = QCheckBox("싱크 가사(.lrc) 별도 파일 함께 저장")
-        self.chk_lrc_file.setChecked(True)
+        self.chk_lrc_file.setChecked(False)
         self.chk_square_cover = QCheckBox("앨범 커버 1:1 정방형 자동 맞춤")
         self.chk_square_cover.setChecked(True)
 
