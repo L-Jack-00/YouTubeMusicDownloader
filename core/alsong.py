@@ -8,7 +8,7 @@ from typing import Optional, Tuple
 import requests
 
 
-ALSONG_ENDPOINT = "http://ws.altools.co.kr/Server/ALSongServer.asmx"
+ALSONG_ENDPOINT = "http://lyrics.alsong.co.kr/alsongwebservice/service1.asmx"
 
 
 def clean_search_term(term: str) -> str:

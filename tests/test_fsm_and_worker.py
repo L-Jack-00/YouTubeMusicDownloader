@@ -113,6 +113,19 @@ class TestStateAndDownloader(unittest.TestCase):
         self.assertEqual(canon_id, "O4ZZJ_ek2gs")
         self.assertIsNotNone(ytm_t)
 
+    def test_fetch_ytmusic_localized_metadata_no_inst_pollution(self):
+        from core.downloader import fetch_ytmusic_localized_metadata
+        # 보컬곡에 대해 (Inst.) 왜곡 없이 순수 정식 한글 곡명이 조회되는지 검증
+        t1, a1, c1 = fetch_ytmusic_localized_metadata("zmMiATGtHAU")
+        self.assertIn("너 때문이야", t1)
+        self.assertNotIn("Inst", t1)
+        self.assertIsNone(c1)
+
+        t2, a2, c2 = fetch_ytmusic_localized_metadata("uJUzAMEeYfM")
+        self.assertIn("죽을 만큼 아파서", t2)
+        self.assertNotIn("Inst", t2)
+        self.assertIsNone(c2)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -5,6 +5,7 @@ yt-dlp Core Downloader and Processing Pipeline.
 import os
 import re
 import glob
+import json
 import shutil
 import urllib.request
 import html as html_lib
@@ -136,55 +137,98 @@ _ytmusic_meta_cache: Dict[str, Tuple[Optional[str], Optional[str], Optional[str]
 
 def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tuple[Optional[str], Optional[str], Optional[str]]:
     """
-    유튜브 뮤직(music.youtube.com) 웹페이지 메타태그에서 구글 음악 지식 그래프가 매핑한
-    한국어 현지화 곡명, 아티스트명, 및 정식 대체 Canonical Video ID를 조회합니다.
-    - og:title -> 곡명 (예: Sick Enough to Die -> 죽을 만큼 아파서)
-    - og:description -> 아티스트명 (예: Supreme Team -> 슈프림팀, Leessang -> 리쌍)
-    - canonical_id -> 정식 대체 음원 ID (예: 재생불가 dJRkhdWsu_M -> 정식 음원 O4ZZJ_ek2gs)
+    유튜브 뮤직 공식 API 및 지식 그래프 메타데이터에서 한국어 현지화 곡명, 아티스트명,
+    및 정식 대체 Canonical Video ID를 조회합니다.
+    - Innertube API (WEB_REMIX, ko-KR)를 통해 Music Premium 프리뷰 왜곡 없는 순수 곡명 조회
+    - 재생 불가능(삭제/권한 만료) 유령 영상인 경우에만 공식 대체 Canonical ID 조회
     """
     if not video_id:
         return None, None, None
     if video_id in _ytmusic_meta_cache:
         return _ytmusic_meta_cache[video_id]
 
-    url = f"https://music.youtube.com/watch?v={video_id}"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
-    }
+    ytm_title, ytm_artist, canonical_id = None, None, None
+
+    # 1. 유튜브 뮤직 내부 Innertube API 호출 (가장 정확하고 게스트 프리뷰 왜곡 없음)
     try:
-        req = urllib.request.Request(url, headers=headers)
+        api_url = "https://music.youtube.com/youtubei/v1/player?prettyPrint=false"
+        payload = {
+            "context": {
+                "client": {
+                    "clientName": "WEB_REMIX",
+                    "clientVersion": "1.20240301.01.00",
+                    "hl": "ko",
+                    "gl": "KR"
+                }
+            },
+            "videoId": video_id
+        }
+        api_headers = {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        req = urllib.request.Request(api_url, data=json.dumps(payload).encode('utf-8'), headers=api_headers)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            content = resp.read().decode('utf-8', errors='ignore')
+            data = json.loads(resp.read().decode('utf-8'))
+            vd = data.get('videoDetails', {})
+            raw_title = vd.get('title')
+            raw_author = vd.get('author')
+            if raw_title:
+                ytm_title = raw_title.strip()
+            if raw_author:
+                ytm_artist = raw_author.strip()
 
-        og_t = re.search(r'<meta property="og:title" content="([^"]+)"', content)
-        og_d = re.search(r'<meta property="og:description" content="([^"]+)"', content)
+            ps = data.get('playabilityStatus', {})
+            status = ps.get('status', '')
+            reason = ps.get('reason', '')
 
-        ytm_title = html_lib.unescape(og_t.group(1)).strip() if og_t and og_t.group(1) else None
-        ytm_artist = html_lib.unescape(og_d.group(1)).strip() if og_d and og_d.group(1) else None
-
-        if ytm_title and ytm_title.endswith(" - YouTube Music"):
-            ytm_title = ytm_title[:-16].strip()
-
-        # 정식 대체 Canonical Video ID 추출 (<link rel="canonical">, <meta property="og:url">, watchEndpoint)
-        canonical_id = None
-        canon_m = re.search(r'<link\s+rel="canonical"\s+href="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
-        if canon_m:
-            canonical_id = canon_m.group(1)
-        else:
-            og_url_m = re.search(r'<meta\s+property="og:url"\s+content="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
-            if og_url_m:
-                canonical_id = og_url_m.group(1)
-            else:
-                ep_m = re.search(r'"watchEndpoint":\{"videoId":"([a-zA-Z0-9_-]{11})"', content)
-                if ep_m:
-                    canonical_id = ep_m.group(1)
-
-        _ytmusic_meta_cache[video_id] = (ytm_title, ytm_artist, canonical_id)
-        return ytm_title, ytm_artist, canonical_id
+            # UNPLAYABLE이면서 Music Premium 제한이 아닌 진짜 삭제/유령 영상인 경우에만 Canonical ID 추적
+            is_truly_dead = (status == 'UNPLAYABLE' and not any(kw in reason.lower() for kw in ['premium', '프리미엄']))
+            if is_truly_dead:
+                html_url = f"https://music.youtube.com/watch?v={video_id}"
+                h_headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept-Language': 'ko-KR,ko;q=0.9',
+                }
+                h_req = urllib.request.Request(html_url, headers=h_headers)
+                with urllib.request.urlopen(h_req, timeout=timeout) as h_resp:
+                    content = h_resp.read().decode('utf-8', errors='ignore')
+                    canon_m = re.search(r'<link\s+rel="canonical"\s+href="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
+                    if canon_m and canon_m.group(1) != video_id:
+                        canonical_id = canon_m.group(1)
     except Exception:
-        _ytmusic_meta_cache[video_id] = (None, None, None)
-        return None, None, None
+        pass
+
+    # 2. API 실패 시 웹페이지 메타태그 폴백 (HTML Scraping)
+    if not ytm_title:
+        try:
+            url = f"https://music.youtube.com/watch?v={video_id}"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+            }
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                content = resp.read().decode('utf-8', errors='ignore')
+
+            og_t = re.search(r'<meta property="og:title" content="([^"]+)"', content)
+            og_d = re.search(r'<meta property="og:description" content="([^"]+)"', content)
+
+            ytm_title = html_lib.unescape(og_t.group(1)).strip() if og_t and og_t.group(1) else None
+            ytm_artist = html_lib.unescape(og_d.group(1)).strip() if og_d and og_d.group(1) else None
+
+            if ytm_title and ytm_title.endswith(" - YouTube Music"):
+                ytm_title = ytm_title[:-16].strip()
+
+            if not canonical_id:
+                canon_m = re.search(r'<link\s+rel="canonical"\s+href="[^"]*[?&]v=([a-zA-Z0-9_-]{11})"', content)
+                if canon_m and canon_m.group(1) != video_id:
+                    canonical_id = canon_m.group(1)
+        except Exception:
+            pass
+
+    _ytmusic_meta_cache[video_id] = (ytm_title, ytm_artist, canonical_id)
+    return ytm_title, ytm_artist, canonical_id
 
 
 def ensure_js_runtime():
@@ -353,11 +397,16 @@ class YoutubeMusicDownloader:
                         video_id = canon_id
 
                     if ytm_t and any('\uac00' <= c <= '\ud7a3' for c in ytm_t):
+                        # 원본 영상 제목에 (Inst.)가 없는데 ytm_t에 (Inst.)가 붙은 경우 게스트 프리뷰 왜곡 방지
+                        if not re.search(r'\b(?:inst\.?|instrumental)\b', disp_title, flags=re.IGNORECASE):
+                            ytm_t = re.sub(r'\s*\((?:inst\.?|instrumental)\)', '', ytm_t, flags=re.IGNORECASE).strip()
                         feat_m = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', disp_title, flags=re.IGNORECASE)
                         if feat_m and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_t, flags=re.IGNORECASE):
                             ytm_t = f"{ytm_t} {feat_m.group(1)}"
                         disp_title = clean_display_title(ytm_t)
                     elif ytm_t and not disp_title:
+                        if not re.search(r'\b(?:inst\.?|instrumental)\b', raw_t, flags=re.IGNORECASE):
+                            ytm_t = re.sub(r'\s*\((?:inst\.?|instrumental)\)', '', ytm_t, flags=re.IGNORECASE).strip()
                         disp_title = clean_display_title(ytm_t)
 
                     if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
@@ -816,6 +865,9 @@ class YoutubeMusicDownloader:
         if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in display_title) or (artist and not any('\uac00' <= c <= '\ud7a3' for c in artist))):
             ytm_title, ytm_artist, _ = fetch_ytmusic_localized_metadata(video_id)
             if ytm_title and any('\uac00' <= c <= '\ud7a3' for c in ytm_title):
+                # 원본 영상 제목에 (Inst.)가 없는데 ytm_title에 (Inst.)가 붙은 경우 게스트 프리뷰 왜곡 방지
+                if not re.search(r'\b(?:inst\.?|instrumental)\b', clean_title, flags=re.IGNORECASE):
+                    ytm_title = re.sub(r'\s*\((?:inst\.?|instrumental)\)', '', ytm_title, flags=re.IGNORECASE).strip()
                 feat_match = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', clean_title, flags=re.IGNORECASE)
                 if feat_match and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_title, flags=re.IGNORECASE):
                     ytm_title = f"{ytm_title} {feat_match.group(1)}"

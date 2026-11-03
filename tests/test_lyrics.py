@@ -49,6 +49,28 @@ class TestLyricsModule(unittest.TestCase):
         self.assertTrue(is_synced)
         self.assertIn("자체 자막 테스트", lyrics)
 
+    def test_get_artist_search_candidates(self):
+        from core.lyrics import get_artist_search_candidates
+        c1 = get_artist_search_candidates("긱스 Geeks")
+        self.assertIn("긱스", c1)
+        self.assertIn("Geeks", c1)
+
+        c2 = get_artist_search_candidates("에픽하이 (EPIK HIGH)")
+        self.assertIn("에픽하이", c2)
+        self.assertIn("EPIK HIGH", c2)
+
+        c3 = get_artist_search_candidates("Dynamicduo - 다이나믹 듀오")
+        self.assertIn("Dynamicduo", c3)
+        self.assertIn("다이나믹 듀오", c3)
+
+    def test_resolve_lyrics_multilingual_artist_fallback(self):
+        from core.lyrics import resolve_lyrics
+        # '긱스 Geeks' 병기 아티스트명으로도 '긱스'로 자동 분리 탐색되어 가사 수집 성공
+        content, is_synced, source = resolve_lyrics("Officially Missing You", "긱스 Geeks")
+        self.assertIsNotNone(content)
+        self.assertTrue(is_synced)
+        self.assertEqual(source, "LRCLIB")
+
 
 if __name__ == '__main__':
     unittest.main()
