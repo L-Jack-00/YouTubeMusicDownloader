@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Automated Build & Packaging Script for YouTube Music Downloader Portable Release.
+Automated Build & Packaging Script for ytmusic-dl Portable Release.
 Constructs an AV-friendly, non-heuristic portable distribution:
 - Standalone folder bundle (--onedir) without %TEMP% extraction dropper behavior
 - No UPX compression (--noupx) to prevent heuristic packer signatures
@@ -36,7 +36,7 @@ def run_build():
         "--noupx",
         "--clean",
         "-y",
-        "--name", "YouTubeMusicDownloader",
+        "--name", "ytmusic-dl",
         "--version-file", os.path.join(BASE_DIR, "version_info.txt"),
         # 불필요한 대용량/휴리스틱 유발 모듈 제외
         "--exclude-module", "PyQt6.QtWebEngine",
@@ -69,7 +69,7 @@ def run_build():
         print("[!] PyInstaller build failed!")
         sys.exit(1)
 
-    app_dir = os.path.join(dist_dir, "YouTubeMusicDownloader")
+    app_dir = os.path.join(dist_dir, "ytmusic-dl")
     if not os.path.isdir(app_dir):
         print(f"[!] Output directory not found: {app_dir}")
         sys.exit(1)
@@ -97,26 +97,25 @@ def run_build():
         f.write("@echo off\r\n")
         f.write("chcp 65001 >nul\r\n")
         f.write("cd /d \"%~dp0\"\r\n")
-        f.write("start \"\" \"YouTubeMusicDownloader.exe\"\r\n")
+        f.write("start \"\" \"ytmusic-dl.exe\"\r\n")
         f.write("exit\r\n")
     print(f"    -> Created {bat_path}")
 
     # 5. 사용 안내서 및 백신 오탐지 방지 가이드 생성
     guide_path = os.path.join(app_dir, "USER_GUIDE.txt")
     guide_content = """================================================================================
- YouTube Music 고음질 다운로더 v1.3.1 (포터블 에디션)
+ ytmusic-dl v1.3.2 (포터블 에디션)
 ================================================================================
 
 [프로그램 개요]
-본 프로그램은 유튜브(YouTube) 및 유튜브 뮤직(YouTube Music)의 음원을
-무손실 M4A(AAC 원본 다이렉트 복사) 또는 320kbps MP3로 최고 음질 다운로드하고,
-정밀 메타데이터 / 싱크 가사(알송/LRCLIB) / 1:1 앨범 아트를 자동 삽입해 주는
+본 프로그램은 음원을 무손실 M4A(AAC 원본 다이렉트 복사) 또는 320kbps MP3로
+최고 음질 다운로드하고, 정밀 메타데이터 / 싱크 가사 / 1:1 앨범 아트를 자동 삽입해 주는
 무설치(Portable) 프로그램입니다.
 
 --------------------------------------------------------------------------------
 [실행 방법]
-1. 'YouTubeMusicDownloader.exe' 또는 'Run_App.bat'을 더블 클릭하여 실행합니다.
-2. 다운로드할 유튜브 음원 또는 재생목록 링크를 붙여넣고 [다운로드 시작]을 누릅니다.
+1. 'ytmusic-dl.exe' 또는 'Run_App.bat'을 더블 클릭하여 실행합니다.
+2. 다운로드할 음원 또는 재생목록 링크를 붙여넣고 [다운로드 시작]을 누릅니다.
 
 --------------------------------------------------------------------------------
 [유튜브 프리미엄 256kbps 최고 음질 연동 (쿠키 가이드)]
@@ -152,7 +151,7 @@ UPX 압축을 일체 사용하지 않아 윈도우 디펜더 및 각종 백신 �
     print(f"    -> Created {guide_path}")
 
     # 6. 최종 포터블 ZIP 아카이브 압축
-    zip_filename = "YouTubeMusicDownloader_v1.3.2_Portable.zip"
+    zip_filename = "ytmusic-dl_v1.3.2_Portable.zip"
     zip_path = os.path.join(release_dir, zip_filename)
     print(f"[*] Packaging portable zip archive to {zip_path}...")
 

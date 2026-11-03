@@ -8,7 +8,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.types import DownloadState, DownloadOptions
-from core.downloader import YoutubeMusicDownloader
+from core.downloader import YtMusicDownloader
 
 
 class DownloadWorker(QThread):
@@ -27,7 +27,7 @@ class DownloadWorker(QThread):
         super().__init__(parent)
         self.url = url
         self.options = options
-        self.downloader = YoutubeMusicDownloader(options)
+        self.downloader = YtMusicDownloader(options)
         self._is_stopped = False
 
     def stop(self):

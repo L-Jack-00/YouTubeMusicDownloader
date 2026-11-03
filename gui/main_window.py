@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Main Application Window for YouTube Music Downloader.
+Main Application Window for ytmusic-dl.
 """
 import os
 import sys
@@ -35,7 +35,7 @@ class MainWindow(QMainWindow):
         self._apply_styles()
 
     def _init_ui(self):
-        self.setWindowTitle("YouTube Music 고음질 다운로더")
+        self.setWindowTitle("ytmusic-dl - 고음질 음원 다운로더")
         self.setMinimumSize(820, 680)
         self.resize(860, 720)
 
@@ -50,9 +50,9 @@ class MainWindow(QMainWindow):
         # 1. 상단 헤더
         header_layout = QHBoxLayout()
         title_box = QVBoxLayout()
-        title_label = QLabel("YouTube Music 고음질 다운로더")
+        title_label = QLabel("ytmusic-dl")
         title_label.setObjectName("titleLabel")
-        subtitle_label = QLabel("단일 곡 및 재생목록 · 앨범아트 1:1 맞춤 · 유튜브 공식 자막 및 싱크 가사 자동 추출")
+        subtitle_label = QLabel("단일 곡 및 재생목록 · 앨범아트 1:1 맞춤 · 공식 자막 및 싱크 가사 자동 추출")
         subtitle_label.setObjectName("statusLabel")
         title_box.addWidget(title_label)
         title_box.addWidget(subtitle_label)

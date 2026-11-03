@@ -304,9 +304,9 @@ def format_track_filename(naming_format: str, meta: TrackMetadata, track_index: 
     return f"{base}.{ext}"
 
 
-class YoutubeMusicDownloader:
+class YtMusicDownloader:
     """
-    유튜브 및 유튜브 뮤직 오디오 다운로드 및 메타데이터 후처리 엔진
+    ytmusic-dl 오디오 다운로드 및 메타데이터 후처리 엔진
     """
 
     def __init__(self, options: DownloadOptions):
@@ -951,3 +951,7 @@ class YoutubeMusicDownloader:
                 os.remove(f)
             except Exception:
                 pass
+
+
+# Backward compatibility alias
+YoutubeMusicDownloader = YtMusicDownloader

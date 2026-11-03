@@ -1,6 +1,6 @@
 # UTF-8
 #
-# Version Information for YouTube Music Downloader
+# Version Information for ytmusic-dl
 #
 VSVersionInfo(
   ffi=FixedFileInfo(
@@ -20,12 +20,12 @@ VSVersionInfo(
           '041204b0',
           [
             StringStruct('CompanyName', 'SBK Studio'),
-            StringStruct('FileDescription', 'YouTube Music 고음질 다운로더'),
+            StringStruct('FileDescription', 'ytmusic-dl - 고음질 음원 다운로더'),
             StringStruct('FileVersion', '1.3.2.0'),
-            StringStruct('InternalName', 'YouTubeMusicDownloader'),
+            StringStruct('InternalName', 'ytmusic-dl'),
             StringStruct('LegalCopyright', 'Copyright (C) 2026 SBK. All rights reserved.'),
-            StringStruct('OriginalFilename', 'YouTubeMusicDownloader.exe'),
-            StringStruct('ProductName', 'YouTube Music Downloader'),
+            StringStruct('OriginalFilename', 'ytmusic-dl.exe'),
+            StringStruct('ProductName', 'ytmusic-dl'),
             StringStruct('ProductVersion', '1.3.2.0')
           ]
         )

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Application Entry Point for YouTube Music Downloader.
+Application Entry Point for ytmusic-dl.
 Version: v1.3.2
 """
 import sys
@@ -46,7 +46,7 @@ from gui.main_window import MainWindow
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("YouTube Music 고음질 다운로더")
+    app.setApplicationName("ytmusic-dl")
     app.setApplicationVersion("1.3.2")
 
     window = MainWindow()

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Type definitions and data structures for YouTube Music Downloader.
+Type definitions and data structures for ytmusic-dl.
 """
 from dataclasses import dataclass, field
 from enum import Enum

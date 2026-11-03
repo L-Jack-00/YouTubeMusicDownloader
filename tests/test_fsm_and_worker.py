@@ -4,7 +4,7 @@ Headless unit tests for DownloadState transitions, cancellation and options.
 """
 import unittest
 from core.types import DownloadState, DownloadOptions, TrackMetadata
-from core.downloader import YoutubeMusicDownloader
+from core.downloader import YtMusicDownloader
 
 
 class TestStateAndDownloader(unittest.TestCase):
@@ -22,7 +22,7 @@ class TestStateAndDownloader(unittest.TestCase):
 
     def test_downloader_cancellation_flag(self):
         opts = DownloadOptions(output_dir="./test_out")
-        downloader = YoutubeMusicDownloader(opts)
+        downloader = YtMusicDownloader(opts)
         self.assertFalse(downloader.is_cancelled())
 
         downloader.cancel()
