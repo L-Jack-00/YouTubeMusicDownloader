@@ -78,6 +78,34 @@ class TestStateAndDownloader(unittest.TestCase):
             self.assertEqual(res.get("total_tracks"), 10)
             self.assertEqual(res.get("album"), "Palette")
 
+    def test_strip_playlist_params(self):
+        from core.downloader import strip_playlist_params
+        # 1. 일반 긴 URL에서 재생목록 파라미터 분리
+        url1 = "https://www.youtube.com/watch?v=zmMiATGtHAU&list=PL1234567890&index=5&pp=sAQB"
+        self.assertEqual(strip_playlist_params(url1), "https://www.youtube.com/watch?v=zmMiATGtHAU")
+
+        # 2. youtu.be 단축 URL에서 재생목록 파라미터 분리
+        url2 = "https://youtu.be/zmMiATGtHAU?list=PL1234567890"
+        self.assertEqual(strip_playlist_params(url2), "https://www.youtube.com/watch?v=zmMiATGtHAU")
+
+        # 3. 재생목록 파라미터가 없는 순수 URL
+        url3 = "https://www.youtube.com/watch?v=zmMiATGtHAU"
+        self.assertEqual(strip_playlist_params(url3), "https://www.youtube.com/watch?v=zmMiATGtHAU")
+
+    def test_deduplicate_featuring_tags(self):
+        from core.downloader import deduplicate_featuring_tags, clean_display_title
+        # 1. 동일 피처링 아티스트 중복 제거
+        title1 = "고백 (Go Back) (Feat. 정인) (feat. 정인)"
+        self.assertEqual(deduplicate_featuring_tags(title1), "고백 (Go Back) (Feat. 정인)")
+
+        # 2. 서로 다른 피처링 아티스트는 보존
+        title2 = "곡명 (Feat. 개코) (with 자이언티)"
+        self.assertEqual(deduplicate_featuring_tags(title2), "곡명 (Feat. 개코) (with 자이언티)")
+
+        # 3. clean_display_title 통합 검증
+        title3 = "고백 (Go Back) [MV] (Feat. 정인) (feat. 정인)"
+        self.assertEqual(clean_display_title(title3), "고백 (Go Back) (Feat. 정인)")
+
 
 if __name__ == '__main__':
     unittest.main()

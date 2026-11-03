@@ -99,8 +99,27 @@ class DownloadWorker(QThread):
             if failed_tracks and not self._is_stopped:
                 retry_total = len(failed_tracks)
                 self.log_emitted.emit("\n" + "=" * 55)
-                self.log_emitted.emit(f"[*] 다운로드되지 않은 {retry_total}개 음원에 대한 자동 재시도를 시작합니다...")
+                self.log_emitted.emit(f"[*] 다운로드되지 않은 {retry_total}개 음원에 대한 자동 재시도를 준비합니다.")
+                self.log_emitted.emit("[*] 유튜브 요청 제한(Rate Limit) 해제를 위해 15초간 대기(쿨다운)합니다...")
                 self.log_emitted.emit("=" * 55)
+
+                # 15초 쿨다운 카운트다운 (1초마다 취소 상태 체크)
+                for remaining in range(15, 0, -1):
+                    if self._is_stopped:
+                        self.work_cancelled.emit()
+                        return
+                    self.progress_changed.emit(
+                        "재시도 쿨다운",
+                        93.0,
+                        f"유튜브 요청 제한 해제 대기 중... ({remaining}초)"
+                    )
+                    time.sleep(1.0)
+
+                if self._is_stopped:
+                    self.work_cancelled.emit()
+                    return
+
+                self.log_emitted.emit("[*] 쿨다운 완료! 실패 음원 재다운로드를 시작합니다.\n")
 
                 remaining_failed = []
 
@@ -114,13 +133,13 @@ class DownloadWorker(QThread):
 
                     self.log_emitted.emit(f"\n[재시도 {retry_idx}/{retry_total}] {track_title}")
                     self.progress_changed.emit(
-                        "자동 재시도 중",
+                        f"재시도 ({retry_idx}/{retry_total})",
                         95.0,
                         f"[{retry_idx}/{retry_total}] '{track_title}' 재다운로드 시도 중..."
                     )
 
-                    # 일시적인 스트림 요청 제한을 완화하기 위한 짧은 대기
-                    time.sleep(1.0)
+                    # 각 재시도 곡 사이 1.5초 안정 간격
+                    time.sleep(1.5)
 
                     def retry_cb(state: DownloadState, pct: float, msg: str):
                         if self._is_stopped:

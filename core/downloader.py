@@ -7,7 +7,8 @@ import re
 import glob
 import shutil
 import urllib.request
-from typing import Optional, List, Dict, Any, Callable
+import html as html_lib
+from typing import Optional, List, Dict, Any, Callable, Tuple
 import yt_dlp
 
 from .types import DownloadState, TrackMetadata, DownloadOptions, ProgressCallback
@@ -90,6 +91,86 @@ def normalize_youtube_url(url: str) -> str:
     return clean_url
 
 
+def strip_playlist_params(url: str) -> str:
+    """재생목록 꼬리표(&list=..., &index=..., &pp=...)를 제거하고 순수 단일 동영상 URL로 정규화합니다."""
+    if not url:
+        return ""
+    # v=VIDEO_ID 패턴 추출 (11자리 유튜브 고유 비디오 ID)
+    id_match = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+    if id_match:
+        return f"https://www.youtube.com/watch?v={id_match.group(1)}"
+    # youtu.be/VIDEO_ID 패턴 추출
+    short_match = re.search(r'youtu\.be/([a-zA-Z0-9_-]{11})', url)
+    if short_match:
+        return f"https://www.youtube.com/watch?v={short_match.group(1)}"
+    return url
+
+
+def deduplicate_featuring_tags(title: str) -> str:
+    """중복된 피처링 태그((feat. ...), (with ...) 등)가 반복될 경우 하나만 남깁니다."""
+    feat_pattern = re.compile(r'\s*\((?:feat\.?|ft\.?|with)\s+([^)]+)\)', re.IGNORECASE)
+    matches = list(feat_pattern.finditer(title))
+    if len(matches) <= 1:
+        return title
+    seen = set()
+    to_remove_spans = []
+    for m in matches:
+        artist_key = re.sub(r'[\s,]+', '', m.group(1).lower())
+        if artist_key in seen:
+            to_remove_spans.append(m.span())
+        else:
+            seen.add(artist_key)
+    if not to_remove_spans:
+        return title
+    result = []
+    last_idx = 0
+    for start, end in to_remove_spans:
+        result.append(title[last_idx:start])
+        last_idx = end
+    result.append(title[last_idx:])
+    return re.sub(r'\s+', ' ', ''.join(result)).strip()
+
+
+_ytmusic_meta_cache: Dict[str, Tuple[Optional[str], Optional[str]]] = {}
+
+
+def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tuple[Optional[str], Optional[str]]:
+    """
+    유튜브 뮤직(music.youtube.com) 웹페이지 메타태그에서 구글 음악 지식 그래프가 매핑한 한국어 현지화 곡명과 아티스트명을 조회합니다.
+    - og:title -> 곡명 (예: Sick Enough to Die -> 죽을 만큼 아파서)
+    - og:description -> 아티스트명 (예: Supreme Team -> 슈프림팀, Leessang -> 리쌍)
+    """
+    if not video_id:
+        return None, None
+    if video_id in _ytmusic_meta_cache:
+        return _ytmusic_meta_cache[video_id]
+
+    url = f"https://music.youtube.com/watch?v={video_id}"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept-Language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7',
+    }
+    try:
+        req = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            content = resp.read().decode('utf-8', errors='ignore')
+
+        og_t = re.search(r'<meta property="og:title" content="([^"]+)"', content)
+        og_d = re.search(r'<meta property="og:description" content="([^"]+)"', content)
+
+        ytm_title = html_lib.unescape(og_t.group(1)).strip() if og_t and og_t.group(1) else None
+        ytm_artist = html_lib.unescape(og_d.group(1)).strip() if og_d and og_d.group(1) else None
+
+        if ytm_title and ytm_title.endswith(" - YouTube Music"):
+            ytm_title = ytm_title[:-16].strip()
+
+        _ytmusic_meta_cache[video_id] = (ytm_title, ytm_artist)
+        return ytm_title, ytm_artist
+    except Exception:
+        _ytmusic_meta_cache[video_id] = (None, None)
+        return None, None
+
+
 def ensure_js_runtime():
     """Deno 또는 Node.js 자바스크립트 런타임 경로를 탐색하여 환경 변수에 자동 바인딩합니다."""
     if shutil.which("deno") or shutil.which("node"):
@@ -115,6 +196,8 @@ def clean_display_title(title: str) -> str:
     t = re.sub(r'\[.*?\]', '', t)
     # 소괄호 중 명백한 비디오 기술 태그만 제거 (피처링, 부제는 엄격 보존)
     t = re.sub(r'\((?:Official\s*(?:Music\s*)?Video|Official\s*Audio|M/?V|Live\s*Clip|Special\s*Clip|Lyrics)\)', '', t, flags=re.IGNORECASE)
+    # 중복 피처링 태그 정리
+    t = deduplicate_featuring_tags(t)
     # 연속 공백 정리
     t = re.sub(r'\s+', ' ', t).strip()
     return t or title.strip()
@@ -239,12 +322,32 @@ class YoutubeMusicDownloader:
 
                 disp_title = clean_display_title(disp_title)
 
+                # 비디오 ID 추출 및 재생목록 꼬리표(&list=...)가 제거된 순수 단일 음원 URL 보장
+                video_id = entry.get('id')
+                if not video_id and entry.get('url'):
+                    id_m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', entry.get('url'))
+                    if id_m:
+                        video_id = id_m.group(1)
+
+                track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(entry.get('url') or "")
+
+                # 유튜브 뮤직 지식 그래프 매핑 확인 (제목이나 아티스트에 한글이 없는 경우)
+                if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in disp_title) or (raw_a and not any('\uac00' <= c <= '\ud7a3' for c in raw_a))):
+                    ytm_t, ytm_a = fetch_ytmusic_localized_metadata(video_id)
+                    if ytm_t and any('\uac00' <= c <= '\ud7a3' for c in ytm_t):
+                        feat_m = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', disp_title, flags=re.IGNORECASE)
+                        if feat_m and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_t, flags=re.IGNORECASE):
+                            ytm_t = f"{ytm_t} {feat_m.group(1)}"
+                        disp_title = clean_display_title(ytm_t)
+                    if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                        raw_a = ytm_a
+
                 tracks.append({
                     'title': disp_title or raw_t,
                     'artist': raw_a,
                     'album': entry.get('album') or info.get('title') or "",
                     'duration': entry.get('duration'),
-                    'url': entry.get('url') or f"https://www.youtube.com/watch?v={entry.get('id')}",
+                    'url': track_url,
                     'index': idx,
                     'total': total_count,
                     'is_album': is_album,
@@ -275,12 +378,31 @@ class YoutubeMusicDownloader:
 
             disp_title = clean_display_title(disp_title)
 
+            video_id = info.get('id')
+            if not video_id:
+                id_m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', url)
+                if id_m:
+                    video_id = id_m.group(1)
+
+            # 재생목록 파라미터가 완전히 제거된 순수 단일 음원 URL 보장
+            track_url = f"https://www.youtube.com/watch?v={video_id}" if video_id else strip_playlist_params(url)
+
+            if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in disp_title) or (raw_a and not any('\uac00' <= c <= '\ud7a3' for c in raw_a))):
+                ytm_t, ytm_a = fetch_ytmusic_localized_metadata(video_id)
+                if ytm_t and any('\uac00' <= c <= '\ud7a3' for c in ytm_t):
+                    feat_m = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', disp_title, flags=re.IGNORECASE)
+                    if feat_m and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_t, flags=re.IGNORECASE):
+                        ytm_t = f"{ytm_t} {feat_m.group(1)}"
+                    disp_title = clean_display_title(ytm_t)
+                if ytm_a and any('\uac00' <= c <= '\ud7a3' for c in ytm_a) and not any('\uac00' <= c <= '\ud7a3' for c in raw_a):
+                    raw_a = ytm_a
+
             return [{
                 'title': disp_title or raw_t,
                 'artist': raw_a,
                 'album': info.get('album') or "",
                 'duration': info.get('duration'),
-                'url': url,
+                'url': track_url,
                 'index': 1,
                 'total': 1,
                 'is_album': False,
@@ -311,7 +433,9 @@ class YoutubeMusicDownloader:
             progress_cb(DownloadState.SCANNING, 5.0, f"[{track_index}/{total_tracks}] 음원 정보 확인 중...")
 
         # 고유 트랙 ID 생성 (동시 다운로드 및 폴더 내 파일 혼선 완전 차단)
-        id_match = re.search(r'[?&]v=([a-zA-Z0-9_-]+)', url)
+        # 재생목록 파라미터(&list=..., &index=...)를 완전히 제거하여 순수 단일 스트림 요청 보장
+        clean_track_url = strip_playlist_params(url)
+        id_match = re.search(r'[?&]v=([a-zA-Z0-9_-]+)', clean_track_url)
         video_id = id_match.group(1) if id_match else f"{track_index}_{os.getpid()}"
         temp_prefix = f"_ytm_{video_id}"
 
@@ -377,7 +501,7 @@ class YoutubeMusicDownloader:
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
+                info = ydl.extract_info(clean_track_url, download=True)
         except yt_dlp.utils.DownloadCancelled:
             if progress_cb:
                 progress_cb(DownloadState.CANCELLED, 0.0, "작업이 취소되었습니다.")
@@ -599,6 +723,26 @@ class YoutubeMusicDownloader:
 
         # 3. 곡명 정제: 피처링(Feat. ...), 부제는 엄격 보존하고 영상 잡동사니 태그([MV], [가사] 등)만 정제
         display_title = clean_display_title(clean_title)
+
+        # 4. 유튜브 뮤직 지식 그래프(Knowledge Graph) 한글명 매핑:
+        # 비디오 제목 또는 아티스트에 한글이 없는 경우(해외 유통용 영문 비디오 제목 등록 등),
+        # music.youtube.com의 한국어 메타데이터(og:title, og:description)를 조회하여 현지화 한글명으로 매핑
+        video_id = info.get('id')
+        if not video_id and info.get('webpage_url'):
+            id_m = re.search(r'[?&]v=([a-zA-Z0-9_-]{11})', info.get('webpage_url'))
+            if id_m:
+                video_id = id_m.group(1)
+
+        if video_id and (not any('\uac00' <= c <= '\ud7a3' for c in display_title) or (artist and not any('\uac00' <= c <= '\ud7a3' for c in artist))):
+            ytm_title, ytm_artist = fetch_ytmusic_localized_metadata(video_id)
+            if ytm_title and any('\uac00' <= c <= '\ud7a3' for c in ytm_title):
+                feat_match = re.search(r'(\((?:feat\.?|ft\.?|with)\s+[^)]+\))', clean_title, flags=re.IGNORECASE)
+                if feat_match and not re.search(r'\b(?:feat\.?|ft\.?|with)\b', ytm_title, flags=re.IGNORECASE):
+                    ytm_title = f"{ytm_title} {feat_match.group(1)}"
+                display_title = clean_display_title(ytm_title)
+
+            if ytm_artist and any('\uac00' <= c <= '\ud7a3' for c in ytm_artist) and not any('\uac00' <= c <= '\ud7a3' for c in artist):
+                artist = ytm_artist
 
         release_year = None
         if info.get('release_year'):
