@@ -13,7 +13,6 @@ build/
 dist/
 release/
 *.spec
-version_info.txt
 
 # Sensitive User Credentials & Session Data (Strictly Isolated)
 session_cookies.txt

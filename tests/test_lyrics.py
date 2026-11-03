@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """
-Headless unit tests for lyrics parsers and cleaning pipeline.
+Headless unit tests for Google CDN & YouTube Native Subtitles / TimedText lyrics engine.
+Tests WebVTT/SRT parsing (synced LRC vs plain lyrics fallback) and description lyrics extraction.
 """
 import unittest
-from core.alsong import clean_search_term, parse_alsong_xml
-from core.lyrics import resolve_lyrics
+from core.alsong import clean_search_term
+from core.lyrics import (
+    parse_subtitles_to_lrc,
+    extract_lyrics_from_description,
+    resolve_lyrics
+)
 
 
 class TestLyricsModule(unittest.TestCase):
@@ -21,55 +26,121 @@ class TestLyricsModule(unittest.TestCase):
             cleaned = clean_search_term(raw)
             self.assertEqual(cleaned, expected, f"Failed cleaning: {raw} -> got '{cleaned}'")
 
-    def test_parse_alsong_xml(self):
-        sample_xml = """<?xml version="1.0" encoding="utf-8"?>
-<soap:Envelope xmlns:soap="http://www.w3.org/2003/05/soap-envelope">
-  <soap:Body>
-    <SearchLyric2Response xmlns="http://tempuri.org/">
-      <SearchLyric2Result>
-        <strLyric>[00:15.20]이 밤 그날의 반딧불을&lt;br&gt;[00:20.10]당신의 창 가까이 보낼게요&lt;br&gt;[00:25.00]사랑한다는 말이에요&lt;br&gt;</strLyric>
-      </SearchLyric2Result>
-    </SearchLyric2Response>
-  </soap:Body>
-</soap:Envelope>""".encode('utf-8')
-        parsed = parse_alsong_xml(sample_xml)
-        self.assertIsNotNone(parsed)
-        self.assertIn("반딧불을", parsed)
-        self.assertIn("\n", parsed)
-        self.assertNotIn("<br>", parsed)
-        self.assertNotIn("&lt;br&gt;", parsed)
+    def test_parse_subtitles_vtt_with_timestamps_to_synced_lrc(self):
+        sample_vtt = """WEBVTT
+Kind: captions
+Language: ko
 
-    def test_resolve_lyrics_prefers_subtitles_first(self):
+00:00:15.200 --> 00:00:19.500
+<c>이 밤 그날의 반딧불을</c>
+
+00:00:20.100 --> 00:00:24.000
+당신의 창 가까이 보낼게요
+
+00:01:05.450 --> 00:01:10.000
+<b>사랑한다는 말이에요</b>
+"""
+        lyrics, is_synced, source = parse_subtitles_to_lrc(sample_vtt)
+        self.assertIsNotNone(lyrics)
+        self.assertTrue(is_synced)
+        self.assertEqual(source, "YouTube Subtitles (Synced)")
+        self.assertIn("[00:15.20] 이 밤 그날의 반딧불을", lyrics)
+        self.assertIn("[00:20.10] 당신의 창 가까이 보낼게요", lyrics)
+        self.assertIn("[01:05.45] 사랑한다는 말이에요", lyrics)
+        self.assertNotIn("<c>", lyrics)
+        self.assertNotIn("<b>", lyrics)
+
+    def test_parse_subtitles_srt_format(self):
+        sample_srt = """1
+00:00:05,300 --> 00:00:08,200
+첫 번째 소절입니다
+
+2
+00:00:09,000 --> 00:00:12,500
+두 번째 소절입니다
+"""
+        lyrics, is_synced, source = parse_subtitles_to_lrc(sample_srt)
+        self.assertIsNotNone(lyrics)
+        self.assertTrue(is_synced)
+        self.assertEqual(source, "YouTube Subtitles (Synced)")
+        self.assertIn("[00:05.30] 첫 번째 소절입니다", lyrics)
+        self.assertIn("[00:09.00] 두 번째 소절입니다", lyrics)
+
+    def test_parse_subtitles_without_timestamps_falls_back_to_plain_lyrics(self):
+        sample_plain_sub = """WEBVTT
+Kind: captions
+Language: ko
+
+이 밤 그날의 반딧불을
+당신의 창 가까이 보낼게요
+좋은 꿈 이길 바라요
+"""
+        lyrics, is_synced, source = parse_subtitles_to_lrc(sample_plain_sub)
+        self.assertIsNotNone(lyrics)
+        self.assertFalse(is_synced)
+        self.assertEqual(source, "YouTube Subtitles (Plain)")
+        self.assertIn("이 밤 그날의 반딧불을", lyrics)
+        self.assertIn("당신의 창 가까이 보낼게요", lyrics)
+        self.assertNotIn("WEBVTT", lyrics)
+        self.assertNotIn("[00:", lyrics)
+
+    def test_extract_lyrics_from_description(self):
+        sample_desc = """
+가수: 아이유 (IU)
+앨범: 밤편지
+
+[가사]
+이 밤 그날의 반딧불을
+당신의 창 가까이 보낼게요
+음 좋은 꿈 이길 바라요
+
+Credit:
+작사: 아이유
+작곡: 김제휘, 김희원
+"""
+        extracted = extract_lyrics_from_description(sample_desc)
+        self.assertIsNotNone(extracted)
+        self.assertIn("이 밤 그날의 반딧불을", extracted)
+        self.assertIn("좋은 꿈 이길 바라요", extracted)
+        self.assertNotIn("Credit:", extracted)
+        self.assertNotIn("[가사]", extracted)
+
+    def test_resolve_lyrics_subtitles_priority_over_description(self):
+        sample_vtt = """WEBVTT
+
+00:00:10.000 --> 00:00:14.000
+자막 가사입니다
+"""
+        sample_desc = """[가사]
+설명란 가사 1행
+설명란 가사 2행
+설명란 가사 3행
+"""
         lyrics, is_synced, source = resolve_lyrics(
             title="테스트 곡",
-            artist="테스트 가수",
-            embedded_subtitles="[00:05.00] 자체 자막 테스트 가사입니다."
+            artist="테스트 아티스트",
+            embedded_subtitles=sample_vtt,
+            description=sample_desc
         )
-        self.assertEqual(source, "YouTube Subtitles")
+        self.assertEqual(source, "YouTube Subtitles (Synced)")
         self.assertTrue(is_synced)
-        self.assertIn("자체 자막 테스트", lyrics)
+        self.assertIn("[00:10.00] 자막 가사입니다", lyrics)
 
-    def test_get_artist_search_candidates(self):
-        from core.lyrics import get_artist_search_candidates
-        c1 = get_artist_search_candidates("긱스 Geeks")
-        self.assertIn("긱스", c1)
-        self.assertIn("Geeks", c1)
-
-        c2 = get_artist_search_candidates("에픽하이 (EPIK HIGH)")
-        self.assertIn("에픽하이", c2)
-        self.assertIn("EPIK HIGH", c2)
-
-        c3 = get_artist_search_candidates("Dynamicduo - 다이나믹 듀오")
-        self.assertIn("Dynamicduo", c3)
-        self.assertIn("다이나믹 듀오", c3)
-
-    def test_resolve_lyrics_multilingual_artist_fallback(self):
-        from core.lyrics import resolve_lyrics
-        # '긱스 Geeks' 병기 아티스트명으로도 '긱스'로 자동 분리 탐색되어 가사 수집 성공
-        content, is_synced, source = resolve_lyrics("Officially Missing You", "긱스 Geeks")
-        self.assertIsNotNone(content)
-        self.assertTrue(is_synced)
-        self.assertEqual(source, "LRCLIB")
+    def test_resolve_lyrics_falls_back_to_description_when_no_subtitles(self):
+        sample_desc = """[Lyrics]
+Line one of song
+Line two of song
+Line three of song
+"""
+        lyrics, is_synced, source = resolve_lyrics(
+            title="Test Song",
+            artist="Test Artist",
+            embedded_subtitles=None,
+            description=sample_desc
+        )
+        self.assertEqual(source, "YouTube Description (Plain)")
+        self.assertFalse(is_synced)
+        self.assertIn("Line one of song", lyrics)
 
 
 if __name__ == '__main__':

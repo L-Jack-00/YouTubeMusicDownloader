@@ -749,17 +749,18 @@ class YoutubeMusicDownloader:
         # 자막/가사 확인 (현재 트랙 전용 자막 파일만 탐색)
         embedded_sub_text = self._read_subtitle_files(self.options.output_dir, temp_prefix)
 
-        # 가사 수집 (3단계 파이프라인)
+        # 가사 수집 (Google CDN & YouTube 네이티브 파이프라인)
         if self.options.embed_lyrics or self.options.save_lrc_file:
             if progress_cb:
-                progress_cb(DownloadState.FETCHING_LYRICS, 75.0, f"[{track_index}/{total_tracks}] 가사 검색 중 (알송/LRCLIB)...")
+                progress_cb(DownloadState.FETCHING_LYRICS, 75.0, f"[{track_index}/{total_tracks}] 자막 및 가사 추출 중 (Google CDN)...")
 
             lyrics_text, is_synced, source_name = resolve_lyrics(
                 title=meta.title,
                 artist=meta.artist,
                 album=meta.album,
                 duration_seconds=meta.duration_seconds,
-                embedded_subtitles=embedded_sub_text
+                embedded_subtitles=embedded_sub_text,
+                description=info.get('description')
             )
             meta.lyrics = lyrics_text
             meta.is_synced_lyrics = is_synced

@@ -45,7 +45,7 @@ class DownloadOptions:
     mp3_bitrate: str = "320k"
     naming_format: str = "artist_title"  # "artist_title", "title_artist", "title_only", "num_artist_title", "num_title"
     embed_lyrics: bool = True
-    save_lrc_file: bool = False
+    save_lrc_file: bool = True
     crop_square_cover: bool = True
     # 쿠키 모드: "none", "browser", "file"
     cookie_mode: str = "none"

@@ -152,7 +152,7 @@ UPX 압축을 일체 사용하지 않아 윈도우 디펜더 및 각종 백신 �
     print(f"    -> Created {guide_path}")
 
     # 6. 최종 포터블 ZIP 아카이브 압축
-    zip_filename = "YouTubeMusicDownloader_v1.3.1_Portable.zip"
+    zip_filename = "YouTubeMusicDownloader_v1.3.2_Portable.zip"
     zip_path = os.path.join(release_dir, zip_filename)
     print(f"[*] Packaging portable zip archive to {zip_path}...")
 
