@@ -625,7 +625,20 @@ class YtMusicDownloader:
             err_str = str(e)
             err_lower = err_str.lower()
 
-            # 1. 유령 영상 (UNPLAYABLE / 동영상을 볼 수 없음) 오류 감지 시 정식 대체 Canonical ID로 즉시 재시도
+            # 1. 자막 다운로드 오류 (HTTP 429 Too Many Requests 등) 감지 시 자막 다운로드를 끄고 즉시 오디오 재다운로드
+            is_sub_error = any(kw in err_lower for kw in ['subtitles', 'subtitle', '자막', '429'])
+            if (not info or not isinstance(info, dict)) and is_sub_error and not self._is_cancelled:
+                try:
+                    no_sub_opts = dict(ydl_opts)
+                    no_sub_opts['writesubtitles'] = False
+                    no_sub_opts['writeautomaticsub'] = False
+                    with yt_dlp.YoutubeDL(no_sub_opts) as ydl_nosub:
+                        info = ydl_nosub.extract_info(clean_track_url, download=True)
+                except Exception as e_nosub:
+                    err_str = str(e_nosub)
+                    err_lower = err_str.lower()
+
+            # 2. 유령 영상 (UNPLAYABLE / 동영상을 볼 수 없음) 오류 감지 시 정식 대체 Canonical ID로 즉시 재시도
             is_unplayable = any(kw in err_lower for kw in ['unplayable', '동영상을 볼 수 없습니다', '동영상을 재생할 수 없음', 'not available'])
             if is_unplayable and not self._is_cancelled:
                 _, _, canon_id = fetch_ytmusic_localized_metadata(video_id)
@@ -649,6 +662,8 @@ class YtMusicDownloader:
                     try:
                         fallback_opts = dict(ydl_opts)
                         fallback_opts['format'] = 'bestaudio/best'
+                        fallback_opts['writesubtitles'] = False
+                        fallback_opts['writeautomaticsub'] = False
                         with yt_dlp.YoutubeDL(fallback_opts) as ydl_fb:
                             info = ydl_fb.extract_info(clean_track_url, download=True)
                     except Exception as e_fb:
@@ -690,8 +705,19 @@ class YtMusicDownloader:
             self._cleanup_temp_files(self.options.output_dir, temp_prefix)
             return None
 
-        # 메타데이터 구성 (원본 앨범 트랙 정보 조회 보강)
-        meta = self._extract_metadata(info, track_index, total_tracks, is_album_playlist=is_album)
+        # 메타데이터 구성 (원본 앨범 트랙 정보 조회 보강 - 안전 예외 가드 탑재)
+        try:
+            meta = self._extract_metadata(info, track_index, total_tracks, is_album_playlist=is_album)
+        except Exception:
+            raw_t = info.get('title') or "Track"
+            raw_a = info.get('artist') or info.get('channel') or info.get('uploader') or "Unknown Artist"
+            meta = TrackMetadata(
+                title=raw_t,
+                artist=raw_a,
+                album=info.get('album') or raw_t,
+                duration_seconds=info.get('duration'),
+                source_url=info.get('webpage_url') or ""
+            )
 
         # 앨범 커버 수집 (영상/음원 본연의 썸네일/아트만 사용, 제3자 검색 아트 배제하여 이미지 불일치 차단)
         cover_bytes = None
@@ -773,20 +799,24 @@ class YtMusicDownloader:
             if progress_cb:
                 progress_cb(DownloadState.FETCHING_LYRICS, 75.0, f"[{track_index}/{total_tracks}] 실시간 싱크 가사 수집 중...")
 
-            lyrics_text, is_synced, source_name = resolve_lyrics(
-                title=meta.title,
-                artist=meta.artist,
-                album=meta.album,
-                duration_seconds=meta.duration_seconds,
-                embedded_subtitles=embedded_sub_text,
-                description=info.get('description'),
-                channel=info.get('channel') or info.get('uploader')
-            )
-            meta.lyrics = lyrics_text
-            meta.is_synced_lyrics = is_synced
-            if progress_cb and source_name != "None":
-                sync_label = "싱크 가사" if is_synced else "일반 가사"
-                progress_cb(DownloadState.FETCHING_LYRICS, 80.0, f"[{track_index}/{total_tracks}] {sync_label} 연동 완료 ({source_name})")
+            try:
+                lyrics_text, is_synced, source_name = resolve_lyrics(
+                    title=meta.title,
+                    artist=meta.artist,
+                    album=meta.album,
+                    duration_seconds=meta.duration_seconds,
+                    embedded_subtitles=embedded_sub_text,
+                    description=info.get('description'),
+                    channel=info.get('channel') or info.get('uploader')
+                )
+                meta.lyrics = lyrics_text
+                meta.is_synced_lyrics = is_synced
+                if progress_cb and source_name != "None":
+                    sync_label = "싱크 가사" if is_synced else "일반 가사"
+                    progress_cb(DownloadState.FETCHING_LYRICS, 80.0, f"[{track_index}/{total_tracks}] {sync_label} 연동 완료 ({source_name})")
+            except Exception:
+                meta.lyrics = None
+                meta.is_synced_lyrics = False
 
         # 파일 이름 형식 적용 및 이름 변경
         naming_fmt = getattr(self.options, 'naming_format', 'artist_title')
@@ -814,12 +844,15 @@ class YtMusicDownloader:
         if progress_cb:
             progress_cb(DownloadState.TAGGING, 90.0, f"[{track_index}/{total_tracks}] 메타데이터 및 앨범아트 기록 중...")
 
-        tag_audio_file(
-            audio_file_path=audio_file,
-            metadata=meta,
-            cover_image_bytes=cover_bytes,
-            save_lrc_file=self.options.save_lrc_file
-        )
+        try:
+            tag_audio_file(
+                audio_file_path=audio_file,
+                metadata=meta,
+                cover_image_bytes=cover_bytes,
+                save_lrc_file=self.options.save_lrc_file
+            )
+        except Exception:
+            pass
 
         # 현재 트랙의 잔여 임시 파일 정리
         self._cleanup_temp_files(self.options.output_dir, temp_prefix)
@@ -923,6 +956,7 @@ class YtMusicDownloader:
             artist=search_query_artist or artist,
             album=album
         )
+        genre = None
         if resolved:
             if not orig_track_number and resolved.get('track_number'):
                 orig_track_number = resolved['track_number']
@@ -937,8 +971,6 @@ class YtMusicDownloader:
                 release_year = resolved['release_year']
             if self.options.embed_lyrics and resolved.get('genre'):
                 genre = resolved['genre']
-        else:
-            genre = None
 
         if orig_track_number is None and is_album_playlist:
             orig_track_number = track_index

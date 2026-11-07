@@ -5,13 +5,17 @@ Version: v1.3.6
 """
 import sys
 import os
+import io
+import traceback
 
-# In Windows GUI / no-console mode, sys.stdout and sys.stderr can be None.
-class _NullStream:
+# In Windows GUI / no-console mode, ensure robust stdout/stderr to prevent crashes
+class _NullStream(io.StringIO):
     def write(self, text):
-        pass
+        return len(text)
     def flush(self):
         pass
+    def isatty(self):
+        return False
     @property
     def encoding(self):
         return 'utf-8'
@@ -33,6 +37,21 @@ else:
             sys.stderr.reconfigure(encoding='utf-8')
     except Exception:
         pass
+
+
+def _global_excepthook(exctype, value, tb):
+    """예기치 않은 예외로 인한 무단 프로세스 종료(튕김)를 방지하고 crash.log에 기록합니다."""
+    err_text = "".join(traceback.format_exception(exctype, value, tb))
+    try:
+        from core.cookie_util import get_app_root_dir
+        log_path = os.path.join(get_app_root_dir(), "crash.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            f.write(err_text + "\n" + "=" * 60 + "\n")
+    except Exception:
+        pass
+
+
+sys.excepthook = _global_excepthook
 
 # Add project root to sys.path
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
