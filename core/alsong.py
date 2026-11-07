@@ -10,6 +10,7 @@ import time
 import xml.etree.ElementTree as ET
 from typing import Optional, Tuple, List
 import requests
+from .lyrics_detector import is_romanized_korean_lyrics, has_hangul
 
 
 ALSONG_ENDPOINT = "http://lyrics.alsong.co.kr/alsongwebservice/service1.asmx"
@@ -210,6 +211,12 @@ def fetch_alsong_lyrics(
                     score += 40
                 if is_word == "0":
                     score += 10
+
+                # 4. 언어 및 로마자 검증 점수
+                if is_romanized_korean_lyrics(cand_l):
+                    score -= 500
+                elif has_hangul(cand_l):
+                    score += 30
 
                 if score > best_score:
                     best_score = score

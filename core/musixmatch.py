@@ -10,6 +10,7 @@ from typing import Optional, Tuple, Dict, Any
 import requests
 
 from .alsong import clean_search_term
+from .lyrics_detector import is_romanized_korean_lyrics, has_hangul
 
 
 ROOT_URL = "https://apic-desktop.musixmatch.com/ws/1.1/"
@@ -116,10 +117,12 @@ def fetch_musixmatch_lyrics(
     artist: str = "",
     album: Optional[str] = None,
     duration_seconds: Optional[int] = None,
-    timeout: int = 5
+    timeout: int = 5,
+    require_korean: bool = False
 ) -> Optional[Tuple[str, bool]]:
     """
     Musixmatch API를 통해 실시간 싱크 가사(.lrc) 또는 일반 가사를 조회합니다.
+    - require_korean=True: 한글 원문 가사만 허용하며 로마자 가사는 배제합니다.
     타임아웃 발생 시 지수 백오프 하네스가 대기 후 재시도합니다.
     성공 시 (가사 내용, 싱크 여부) 반환, 실패 시 None 반환.
     """
@@ -199,7 +202,9 @@ def fetch_musixmatch_lyrics(
                 subtitle = sbody.get("subtitle", {})
                 lrc_text = subtitle.get("subtitle_body")
                 if lrc_text and len(lrc_text.strip()) > 10 and "[" in lrc_text:
-                    return (lrc_text.strip(), True)
+                    if not is_romanized_korean_lyrics(lrc_text):
+                        if not require_korean or has_hangul(lrc_text):
+                            return (lrc_text.strip(), True)
 
         # 2. 일반 줄글 가사 폴백 (track.lyrics.get)
         if matched_track.get("has_lyrics", 0) and (track_id or commontrack_id):
@@ -222,8 +227,9 @@ def fetch_musixmatch_lyrics(
                 if plain_text and len(plain_text.strip()) > 10:
                     # Musixmatch 면책조항 문구 제거
                     cleaned_plain = re.sub(r'\*\*\*\*\*\*\* This Lyrics is NOT for Commercial use \*\*\*\*\*\*\*.*', '', plain_text, flags=re.DOTALL).strip()
-                    if cleaned_plain:
-                        return (cleaned_plain, False)
+                    if cleaned_plain and not is_romanized_korean_lyrics(cleaned_plain):
+                        if not require_korean or has_hangul(cleaned_plain):
+                            return (cleaned_plain, False)
 
     except Exception:
         pass

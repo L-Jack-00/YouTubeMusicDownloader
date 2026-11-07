@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Application Entry Point for ytmusic-dl.
-Version: v1.3.5
+Version: v1.3.6
 """
 import sys
 import os
@@ -47,7 +47,7 @@ from gui.main_window import MainWindow
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("ytmusic-dl")
-    app.setApplicationVersion("1.3.5")
+    app.setApplicationVersion("1.3.6")
 
     window = MainWindow()
     window.show()

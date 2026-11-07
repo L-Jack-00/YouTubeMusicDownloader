@@ -779,7 +779,8 @@ class YtMusicDownloader:
                 album=meta.album,
                 duration_seconds=meta.duration_seconds,
                 embedded_subtitles=embedded_sub_text,
-                description=info.get('description')
+                description=info.get('description'),
+                channel=info.get('channel') or info.get('uploader')
             )
             meta.lyrics = lyrics_text
             meta.is_synced_lyrics = is_synced
@@ -934,6 +935,10 @@ class YtMusicDownloader:
                     artist = resolved['artist']
             if not release_year and resolved.get('release_year'):
                 release_year = resolved['release_year']
+            if self.options.embed_lyrics and resolved.get('genre'):
+                genre = resolved['genre']
+        else:
+            genre = None
 
         if orig_track_number is None and is_album_playlist:
             orig_track_number = track_index
@@ -949,7 +954,8 @@ class YtMusicDownloader:
             duration_seconds=info.get('duration'),
             thumbnail_url=thumb_url,
             artwork_url=None,
-            source_url=info.get('webpage_url') or ""
+            source_url=info.get('webpage_url') or "",
+            genre=genre
         )
 
     def _read_subtitle_files(self, directory: str, prefix: str) -> Optional[str]:

@@ -72,13 +72,15 @@ def resolve_album_metadata(
                     artist_name = matched.get("artistName")
                     release_date = matched.get("releaseDate")
                     release_year = release_date[:4] if release_date and len(release_date) >= 4 else None
+                    primary_genre = matched.get("primaryGenreName")
 
                     return {
                         "track_number": track_number,
                         "total_tracks": track_count,
                         "album": collection_name,
                         "artist": artist_name,
-                        "release_year": release_year
+                        "release_year": release_year,
+                        "genre": primary_genre
                     }
         except Exception:
             continue

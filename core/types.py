@@ -35,6 +35,7 @@ class TrackMetadata:
     source_url: str = ""
     lyrics: Optional[str] = None
     is_synced_lyrics: bool = False
+    genre: Optional[str] = None
 
 
 @dataclass

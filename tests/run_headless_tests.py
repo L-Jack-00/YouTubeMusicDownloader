@@ -29,12 +29,14 @@ def run_all_tests():
     suite = unittest.TestSuite()
 
     from tests.test_lyrics import TestLyricsModule
+    from tests.test_lyrics_detector import TestLyricsDetector
     from tests.test_image_util import TestImageUtil
     from tests.test_tagger import TestTagger
     from tests.test_fsm_and_worker import TestStateAndDownloader
     from tests.test_cookie_parser import TestCookieParser
 
     suite.addTests(loader.loadTestsFromTestCase(TestLyricsModule))
+    suite.addTests(loader.loadTestsFromTestCase(TestLyricsDetector))
     suite.addTests(loader.loadTestsFromTestCase(TestImageUtil))
     suite.addTests(loader.loadTestsFromTestCase(TestTagger))
     suite.addTests(loader.loadTestsFromTestCase(TestStateAndDownloader))

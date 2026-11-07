@@ -105,7 +105,7 @@ def run_build():
     # 5. 사용 안내서 및 백신 오탐지 방지 가이드 생성
     guide_path = os.path.join(app_dir, "USER_GUIDE.txt")
     guide_content = """================================================================================
- ytmusic-dl v1.3.5 (포터블 에디션)
+ ytmusic-dl v1.3.6 (포터블 에디션)
 ================================================================================
 
 [프로그램 개요]
@@ -152,7 +152,7 @@ UPX 압축을 일체 사용하지 않아 윈도우 디펜더 및 각종 백신 �
     print(f"    -> Created {guide_path}")
 
     # 6. 최종 포터블 ZIP 아카이브 압축
-    zip_filename = "ytmusic-dl_v1.3.5_Portable.zip"
+    zip_filename = "ytmusic-dl_v1.3.6_Portable.zip"
     zip_path = os.path.join(release_dir, zip_filename)
     print(f"[*] Packaging portable zip archive to {zip_path}...")
 

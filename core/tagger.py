@@ -5,7 +5,7 @@ Mutagen-based audio metadata and lyrics tagger supporting MP3 and M4A.
 import os
 from typing import Optional
 from mutagen.id3 import (
-    ID3, TIT2, TPE1, TALB, TDRC, TRCK, APIC, USLT, ID3NoHeaderError
+    ID3, TIT2, TPE1, TALB, TDRC, TRCK, APIC, USLT, TCON, ID3NoHeaderError
 )
 from mutagen.mp4 import MP4, MP4Cover
 from .types import TrackMetadata
@@ -18,7 +18,7 @@ def tag_audio_file(
     save_lrc_file: bool = False
 ) -> bool:
     """
-    오디오 파일(MP3 또는 M4A)에 메타데이터, 가사, 앨범 아트를 임베딩합니다.
+    오디오 파일(MP3 또는 M4A)에 메타데이터, 장르, 가사, 앨범 아트를 임베딩합니다.
     """
     if not os.path.isfile(audio_file_path):
         return False
@@ -70,6 +70,11 @@ def _tag_mp3(
                 trck_str = str(metadata.track_number)
             audio.add(TRCK(encoding=3, text=trck_str))
 
+        # 장르 태그 (TCON)
+        if metadata.genre:
+            audio.delall("TCON")
+            audio.add(TCON(encoding=3, text=metadata.genre))
+
         # 가사 임베딩 (USLT)
         if metadata.lyrics:
             audio.delall("USLT")
@@ -116,6 +121,10 @@ def _tag_m4a(
         if metadata.track_number is not None:
             total = metadata.total_tracks or 0
             tags["trkn"] = [(metadata.track_number, total)]
+
+        # 장르 태그 (\xa9gen)
+        if metadata.genre:
+            tags["\xa9gen"] = [metadata.genre]
 
         # 가사 임베딩 (\xa9lyr)
         if metadata.lyrics:

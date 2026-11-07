@@ -8,11 +8,12 @@ import re
 from typing import Optional, Tuple, List, Dict, Any
 import requests
 from .alsong import clean_search_term
+from .lyrics_detector import is_romanized_korean_lyrics, has_hangul
 
 LRCLIB_GET_URL = "https://lrclib.net/api/get"
 LRCLIB_SEARCH_URL = "https://lrclib.net/api/search"
 LRCLIB_HEADERS = {
-    "User-Agent": "ytmusic-dl/1.3.4 (https://github.com/L-Jack-00/ytmusic-dl)",
+    "User-Agent": "ytmusic-dl/1.3.6 (https://github.com/L-Jack-00/ytmusic-dl)",
     "Accept": "application/json",
 }
 
@@ -113,22 +114,36 @@ def get_artist_search_candidates(artist: str) -> List[str]:
     return unique_candidates
 
 
-def _score_lrclib_item(item: Dict[str, Any]) -> int:
+def _score_lrclib_item(item: Dict[str, Any], require_korean: bool = False) -> int:
     """
     가사 적합도 점수 계산:
+    - 로마자 가사 감지 시 즉시 탈락 (-1000)
+    - 한국어 필수 모드에서 한글 부재 시 탈락 (-500)
     - 싱크 가사 우선 (+1000)
     - 한국어 가사 우선 (+500, 영문 로마자 발음 전사 대비 원문 한글 가사 선호)
     """
     synced = item.get("syncedLyrics") or ""
     plain = item.get("plainLyrics") or ""
+    candidate_text = synced or plain
+    if not candidate_text:
+        return -1000
+
+    # 1. 로마자 발음 가사 (Romanized) 엄격 기각
+    if is_romanized_korean_lyrics(candidate_text):
+        return -1000
+
+    # 2. 한국어 가사 필수 요구 시 한글 미포함 가사 기각
+    if require_korean and not has_hangul(candidate_text):
+        return -500
+
     score = 0
     if synced:
         score += 1000
-        if re.search(r'[가-힣]', synced):
+        if has_hangul(synced):
             score += 500
     elif plain:
         score += 100
-        if re.search(r'[가-힣]', plain):
+        if has_hangul(plain):
             score += 50
     return score
 
@@ -138,10 +153,12 @@ def fetch_lrclib_lyrics(
     artist: str,
     album: Optional[str] = None,
     duration_seconds: Optional[int] = None,
-    timeout: int = 5
+    timeout: int = 5,
+    require_korean: bool = False
 ) -> Optional[Tuple[str, bool]]:
     """
     LRCLIB 공개 API를 통해 503 방어 하네스 및 다중 후보 탐색으로 싱크/일반 가사를 수집합니다.
+    - require_korean=True: 한글 원문 가사만 허용하며 로마자 가사는 배제합니다.
     반환값: (가사 텍스트, 싱크 가사 여부[True=LRC, False=일반]) 또는 None
     """
     c_title = clean_search_term(title)
@@ -163,9 +180,13 @@ def fetch_lrclib_lyrics(
             synced = data.get("syncedLyrics")
             plain = data.get("plainLyrics")
             if synced and len(synced.strip()) > 10:
-                return (synced.strip(), True)
+                if not is_romanized_korean_lyrics(synced):
+                    if not require_korean or has_hangul(synced):
+                        return (synced.strip(), True)
             if plain and len(plain.strip()) > 10:
-                return (plain.strip(), False)
+                if not is_romanized_korean_lyrics(plain):
+                    if not require_korean or has_hangul(plain):
+                        return (plain.strip(), False)
 
     # 2단계: 유연 검색 시도 (/api/search with track_name & artist_name)
     best_item = None
@@ -179,7 +200,7 @@ def fetch_lrclib_lyrics(
         results = _request_with_retry(LRCLIB_SEARCH_URL, params=search_params, timeout=timeout, max_retries=2)
         if isinstance(results, list) and results:
             for item in results:
-                s = _score_lrclib_item(item)
+                s = _score_lrclib_item(item, require_korean=require_korean)
                 if s > best_score:
                     best_score = s
                     best_item = item
@@ -188,20 +209,20 @@ def fetch_lrclib_lyrics(
                 break
 
     # 3단계: 전문 텍스트 쿼리 검색 (/api/search with q)
-    if not best_item:
+    if not best_item or best_score <= 0:
         for a in artist_candidates:
             query = f"{c_title} {a}".strip()
             results = _request_with_retry(LRCLIB_SEARCH_URL, params={"q": query}, timeout=timeout, max_retries=2)
             if isinstance(results, list) and results:
                 for item in results:
-                    s = _score_lrclib_item(item)
+                    s = _score_lrclib_item(item, require_korean=require_korean)
                     if s > best_score:
                         best_score = s
                         best_item = item
                 if best_item and best_score >= 1000:
                     break
 
-    if best_item:
+    if best_item and best_score > 0:
         synced = best_item.get("syncedLyrics")
         plain = best_item.get("plainLyrics")
         if synced and len(synced.strip()) > 10:
