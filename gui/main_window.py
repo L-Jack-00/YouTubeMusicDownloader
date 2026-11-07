@@ -393,13 +393,19 @@ class MainWindow(QMainWindow):
         self.label_status.setText("작업을 준비하는 중입니다...")
 
         # 워커 시작
-        self.worker = DownloadWorker(url=url, options=options)
-        self.worker.progress_changed.connect(self._on_worker_progress)
-        self.worker.log_emitted.connect(self._on_worker_log)
-        self.worker.batch_finished.connect(self._on_worker_finished)
-        self.worker.work_cancelled.connect(self._on_worker_cancelled)
-        self.worker.error_occurred.connect(self._on_worker_error)
-        self.worker.start()
+        try:
+            self.worker = DownloadWorker(url=url, options=options)
+            self.worker.progress_changed.connect(self._on_worker_progress)
+            self.worker.log_emitted.connect(self._on_worker_log)
+            self.worker.batch_finished.connect(self._on_worker_finished)
+            self.worker.work_cancelled.connect(self._on_worker_cancelled)
+            self.worker.error_occurred.connect(self._on_worker_error)
+            self.worker.start()
+        except Exception as e:
+            self._set_ui_busy(False)
+            self.label_status.setText("다운로드 준비 중 오류가 발생했습니다.")
+            self._show_error_dialog("작업 시작 오류", f"작업을 시작하는 도중 오류가 발생했습니다:
+{str(e)}")
 
     def _handle_cancel_download(self):
         if self.worker and self.worker.isRunning():

@@ -127,5 +127,13 @@ class TestStateAndDownloader(unittest.TestCase):
         self.assertIsNone(c2)
 
 
+    def test_ensure_js_runtime_no_crash_without_deno_or_node(self):
+        import shutil
+        from core.downloader import ensure_js_runtime
+        from unittest.mock import patch
+        with patch("shutil.which", return_value=None):
+            # Should not raise NameError: name 'sys' is not defined or any other exception
+            ensure_js_runtime()
+
 if __name__ == '__main__':
     unittest.main()

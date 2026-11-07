@@ -3,6 +3,7 @@
 yt-dlp Core Downloader and Processing Pipeline.
 """
 import os
+import sys
 import re
 import glob
 import json
@@ -233,34 +234,37 @@ def fetch_ytmusic_localized_metadata(video_id: str, timeout: float = 3.0) -> Tup
 
 def ensure_js_runtime():
     """Deno 또는 Node.js 자바스크립트 런타임 경로를 탐색하여 환경 변수에 자동 바인딩합니다."""
-    if shutil.which("deno") or shutil.which("node"):
-        return
-
-    # 1. 포터블 번들 환경 (_internal/deno.exe 또는 앱 루트/deno.exe) 우선 탐색
-    app_root = (
-        os.path.dirname(os.path.abspath(sys.executable))
-        if getattr(sys, "frozen", False)
-        else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    )
-    candidates = [
-        os.path.join(app_root, "_internal"),
-        app_root,
-    ]
-    for d in candidates:
-        if os.path.isfile(os.path.join(d, "deno.exe")):
-            os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
+    try:
+        if shutil.which("deno") or shutil.which("node"):
             return
 
-    # 2. 시스템 WinGet 설치 경로 탐색
-    local_app_data = os.environ.get("LOCALAPPDATA", "")
-    if local_app_data:
-        winget_candidates = glob.glob(
-            os.path.join(local_app_data, "Microsoft", "WinGet", "Packages", "DenoLand.Deno*")
+        # 1. 포터블 번들 환경 (_internal/deno.exe 또는 앱 루트/deno.exe) 우선 탐색
+        app_root = (
+            os.path.dirname(os.path.abspath(sys.executable))
+            if getattr(sys, "frozen", False)
+            else os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        for c in winget_candidates:
-            if os.path.isfile(os.path.join(c, "deno.exe")):
-                os.environ["PATH"] = c + os.pathsep + os.environ.get("PATH", "")
+        candidates = [
+            os.path.join(app_root, "_internal"),
+            app_root,
+        ]
+        for d in candidates:
+            if os.path.isfile(os.path.join(d, "deno.exe")):
+                os.environ["PATH"] = d + os.pathsep + os.environ.get("PATH", "")
                 return
+
+        # 2. 시스템 WinGet 설치 경로 탐색
+        local_app_data = os.environ.get("LOCALAPPDATA", "")
+        if local_app_data:
+            winget_candidates = glob.glob(
+                os.path.join(local_app_data, "Microsoft", "WinGet", "Packages", "DenoLand.Deno*")
+            )
+            for c in winget_candidates:
+                if os.path.isfile(os.path.join(c, "deno.exe")):
+                    os.environ["PATH"] = c + os.pathsep + os.environ.get("PATH", "")
+                    return
+    except Exception:
+        pass
 
 
 def clean_display_title(title: str) -> str:
@@ -347,6 +351,7 @@ class YtMusicDownloader:
         """
         target_url = normalize_youtube_url(url)
         ydl_opts: Dict[str, Any] = {
+            'socket_timeout': 15.0,
             'extract_flat': True,
             'skip_download': True,
             'quiet': True,
