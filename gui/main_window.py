@@ -5,6 +5,7 @@ Main Application Window for ytmusic-dl.
 import os
 import sys
 import subprocess
+from typing import Optional
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPushButton, QComboBox, QCheckBox,
@@ -404,8 +405,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self._set_ui_busy(False)
             self.label_status.setText("다운로드 준비 중 오류가 발생했습니다.")
-            self._show_error_dialog("작업 시작 오류", f"작업을 시작하는 도중 오류가 발생했습니다:
-{str(e)}")
+            QMessageBox.critical(self, "작업 시작 오류", f"작업을 시작하는 도중 오류가 발생했습니다:\n{str(e)}")
 
     def _handle_cancel_download(self):
         if self.worker and self.worker.isRunning():
